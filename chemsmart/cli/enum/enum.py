@@ -11,7 +11,7 @@ import os
 import click
 
 from chemsmart.io.molecules.structure import Molecule
-from chemsmart.utils.cli import MyGroup
+from chemsmart.utils.cli import MyCommand
 
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ def click_emum_jobtype_options(f):
     return wrapper_enum_jobtype_options
 
 
-@click.group(cls=MyGroup)
+@click.command(cls=MyCommand)  # 改为 command 而不是 group
 @click_enum_settings_options
 @click_emum_jobtype_options
 @click.option(
@@ -143,7 +143,7 @@ def enum(
             label = pubchem.replace(' ', '_')
         else:
             label = "enum"
-        label = f"{label}_{ctx.invoked_subcommand}"
+        label = f"{label}_enum"
     
     logger.debug(f"Enumeration job label: {label}")
 
@@ -171,10 +171,51 @@ def enum(
         for pv in position_variation:
             logger.debug(f"Processing position variation: {pv}")
 
-    # store objects in context for subcommands
-    ctx.obj["molecules"] = molecules
-    ctx.obj["filename"] = filename
-    ctx.obj["label"] = label
-    ctx.obj["output_dir"] = output_dir
-    ctx.obj["linknode"] = linknode  # tuple of specifications
-    ctx.obj["position_variation"] = position_variation  # tuple of specifications
+    # 直接创建和运行 EnumJob，而不需要子命令
+    logger.info("Starting enumeration job execution")
+    
+    # 获取分子
+    molecule = molecules[-1] if isinstance(molecules, list) else molecules
+    
+    # 转换参数格式
+    linknode_specs = list(linknode) if linknode else []
+    position_variation_specs = list(position_variation) if position_variation else []
+    
+    # 创建 EnumJob
+    from chemsmart.jobs.enum.job import EnumJob
+    
+    enum_job = EnumJob(
+        molecule=molecule,
+        label=label,
+        linknode_specs=linknode_specs,
+        position_variation_specs=position_variation_specs,
+        jobrunner=None,
+        **kwargs,
+    )
+    
+    logger.info(f"Created EnumJob: {enum_job}")
+    logger.debug(f"LINKNODE specs: {enum_job.linknode_specs}")
+    logger.debug(f"Position Variation specs: {enum_job.position_variation_specs}")
+    
+    # 创建 JobRunner
+    from chemsmart.jobs.runner import JobRunner
+    from chemsmart.settings.server import Server
+    
+    server = Server.current()
+    jobrunner = JobRunner.from_job(
+        job=enum_job,
+        server=server,
+        scratch=False,  # EnumJobRunner 默认不使用 scratch
+        fake=False,
+    )
+    logger.info(f"Created JobRunner: {jobrunner}")
+    
+    # 设置 jobrunner
+    enum_job.jobrunner = jobrunner
+    
+    # 运行作业
+    logger.info("Executing enumeration job...")
+    enum_job._run()
+    
+    logger.info("Enumeration job completed successfully")
+    return enum_job

@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 
 class EnumJob(Job):
     PROGRAM = "Enum"
+    TYPE = "enum" 
 
     def __init__(
-        self, molecule, label=None, **kwargs
+        self, molecule, label=None, linknode_specs=None, position_variation_specs=None, **kwargs
     ):
         super().__init__(
             molecule=molecule, label=label, jobrunner=None, **kwargs
@@ -30,6 +31,13 @@ class EnumJob(Job):
         if label is None:
             label = molecule.get_chemical_formula(empirical=True)
         self.label = label
+        
+        # 存储枚举相关参数
+        self.linknode_specs = linknode_specs or []
+        self.position_variation_specs = position_variation_specs or []
+        
+        logger.debug(f"EnumJob created with LINKNODE specs: {self.linknode_specs}")
+        logger.debug(f"EnumJob created with Position Variation specs: {self.position_variation_specs}")
 
     @property
     def outputfile(self):
@@ -37,11 +45,12 @@ class EnumJob(Job):
         return os.path.join(self.folder, outputfile)
 
     def _run(self, **kwargs):
-        """Run the enumeration directly using RDKit."""
-        logger.info(f"Running EnumJob {self}")
-        # Actual enumeration logic will be implemented here
-        # For now, this is a placeholder that satisfies the abstract method requirement
-        pass
+        """Run the enumeration using the assigned jobrunner."""
+        if self.jobrunner is None:
+            raise ValueError(f"No jobrunner assigned to {self}")
+        
+        logger.info(f"Running EnumJob {self} with jobrunner {self.jobrunner}")
+        self.jobrunner.run(self, **kwargs)
 
     @classmethod
     def from_filename(
@@ -49,6 +58,8 @@ class EnumJob(Job):
         filename,
         index="-1",
         label=None,
+        linknode_specs=None,
+        position_variation_specs=None,
         **kwargs,
     ):
         """Create an EnumJob from a file containing molecule data."""
@@ -62,12 +73,14 @@ class EnumJob(Job):
         return cls(
             molecule=molecules,
             label=label,
+            linknode_specs=linknode_specs,
+            position_variation_specs=position_variation_specs,
             **kwargs,
         )
 
     @classmethod
     def from_pubchem(
-        cls, identifier, label=None, **kwargs
+        cls, identifier, label=None, linknode_specs=None, position_variation_specs=None, **kwargs
     ):
         """Create an EnumJob from a PubChem identifier."""
         molecules = Molecule.from_pubchem(identifier=identifier)
@@ -75,6 +88,8 @@ class EnumJob(Job):
         return cls(
             molecule=molecules,
             label=label,
+            linknode_specs=linknode_specs,
+            position_variation_specs=position_variation_specs,
             **kwargs,
         )
 
