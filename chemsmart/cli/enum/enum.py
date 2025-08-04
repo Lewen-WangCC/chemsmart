@@ -189,7 +189,6 @@ def enum(
         label=label,
         linknode_specs=linknode_specs,
         position_variation_specs=position_variation_specs,
-        jobrunner=None,
         **kwargs,
     )
     

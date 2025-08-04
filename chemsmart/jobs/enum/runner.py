@@ -1,8 +1,24 @@
+import glob
 import logging
 import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 from contextlib import suppress
 
+from chemsmart.io.molecules.structure import Molecule
 from chemsmart.jobs.runner import JobRunner
+from chemsmart.settings.executable import GaussianExecutable
+from chemsmart.utils.periodictable import PeriodicTable
+from chemsmart.utils.utils import (
+    get_prepend_string_list_from_modred_free_format,
+    quote_path,
+    run_command,
+)
+
+pt = PeriodicTable()
 
 logger = logging.getLogger(__name__)
 
@@ -10,13 +26,13 @@ logger = logging.getLogger(__name__)
 class EnumJobRunner(JobRunner):
     """JobRunner for molecular enumeration using RDKit."""
     
-    JOBTYPES = ["enum"]  # 支持的作业类型
+    JOBTYPES = []
     PROGRAM = "Enum"
     FAKE = False
-    SCRATCH = False  # 枚举通常不需要scratch，直接在工作目录操作
+    SCRATCH = False
     
     def __init__(self, server, scratch=None, fake=False, scratch_dir=None, **kwargs):
-        # EnumJobRunner 默认不使用 scratch，但保留参数以保持架构一致性
+        # Use default SCRATCH if scratch is not explicitly set
         if scratch is None:
             scratch = self.SCRATCH  # 默认 False
         
@@ -111,6 +127,16 @@ class EnumJobRunner(JobRunner):
         logger.debug(f"MOLBlock size: {len(self.molblock_v3000)} characters")
         logger.debug(f"RDKit molecule: {self.rdkit_mol}")
         logger.debug(f"Has modifications: {enum_writer.has_modifications()}")
+        
+        # DEBUG: Print MOLBlock and exit for testing
+        print("=" * 60)
+        print("MOLBLOCK V3000 OUTPUT:")
+        print("=" * 60)
+        print(self.molblock_v3000)
+        print("=" * 60)
+        print("Conversion successful! Exiting for testing...")
+        import sys
+        sys.exit(0)
         
         # 存储 writer 实例以便后续使用
         self.enum_writer = enum_writer
