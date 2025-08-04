@@ -50,8 +50,13 @@ class EnumJobRunner(JobRunner):
             fake=fake,
             **kwargs,
         )
-        logger.debug(f"EnumJobRunner server: {self.server}")
-        logger.debug(f"EnumJobRunner scratch: {self.scratch} (typically not needed)")
+        logger.debug(f"Jobrunner server: {self.server}")
+        logger.debug(f"Jobrunner num cores: {self.num_cores}")
+        logger.debug(f"Jobrunner num hours: {self.num_hours}")
+        logger.debug(f"Jobrunner num gpus: {self.num_gpus}")
+        logger.debug(f"Jobrunner mem gb: {self.mem_gb}")
+        logger.debug(f"Jobrunner num threads: {self.num_threads}")
+        logger.debug(f"Jobrunner scratch: {self.scratch}")
 
     @property
     def executable(self):
@@ -64,82 +69,62 @@ class EnumJobRunner(JobRunner):
 
     def _assign_variables(self, job):
         """Set up file paths and directories for enumeration output."""
-        # 设置输出文件路径 - 始终在作业目录中
-        self.job_outputfile = job.outputfile
-        
-        if self.scratch and self.scratch_dir:
-            self._set_up_variables_in_scratch(job)
-        else:
-            self._set_up_variables_in_job_directory(job)
-        
-        # 确保输出目录存在
-        if not os.path.exists(self.running_directory):
-            os.makedirs(self.running_directory, exist_ok=True)
-            logger.info(f"Created output directory: {self.running_directory}")
-
-    def _set_up_variables_in_scratch(self, job):
-        """Set up file paths when using scratch directory."""
-        scratch_job_dir = os.path.join(self.scratch_dir, job.label)
-        if not os.path.exists(scratch_job_dir):
-            with suppress(FileExistsError):
-                os.makedirs(scratch_job_dir)
-        self.running_directory = scratch_job_dir
-        logger.debug(f"Running directory (scratch): {self.running_directory}")
-        
-        # 枚举作业的输出文件
-        job_outputfile = job.label + ".xyz"
-        scratch_job_outputfile = os.path.join(scratch_job_dir, job_outputfile)
-        self.job_outputfile = os.path.abspath(scratch_job_outputfile)
-
-    def _set_up_variables_in_job_directory(self, job):
-        """Set up file paths when using job directory directly."""
+        # 设置运行目录为作业目录
         self.running_directory = job.folder
         logger.debug(f"Running directory: {self.running_directory}")
-        
-        # 保持与 scratch 模式一致的文件命名逻辑
-        job_outputfile = job.label + ".xyz"
-        job_outputfile_path = os.path.join(job.folder, job_outputfile)
-        self.job_outputfile = os.path.abspath(job_outputfile_path)
+        self.job_basename = job.label
+        self.job_inputfile = os.path.abspath(job.inputfile)
+        self.job_outputfile = os.path.abspath(job.outputfile)
 
     def _write_input(self, job):
-        """Prepare input for enumeration - convert molecule to RDKit MOLBlock format."""
-        from chemsmart.jobs.enum.writer import EnumWriter
+        """Prepare input for enumeration - convert molecule to RDKit format."""
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import rdMolDescriptors
+        except ImportError:
+            raise ImportError("RDKit is required for enumeration jobs. Please install RDKit.")
+        
+        # 获取分子对象
+        mol = job.molecule
+        if not mol:
+            raise ValueError("No molecule provided for enumeration job.")
         
         # 获取 linknode 和 position_variation 参数
         linknode_specs = getattr(job, 'linknode_specs', [])
         position_variation_specs = getattr(job, 'position_variation_specs', [])
         
-        logger.debug(f"Creating EnumWriter with LINKNODE specs: {linknode_specs}")
-        logger.debug(f"Creating EnumWriter with Position Variation specs: {position_variation_specs}")
+        logger.info(f"Converting molecule to RDKit format for enumeration job: {job.label}")
+        logger.debug(f"LINKNODE specs: {linknode_specs}")
+        logger.debug(f"Position Variation specs: {position_variation_specs}")
         
-        # 创建 EnumWriter 并生成 MOLBlock
-        enum_writer = EnumWriter(
-            job=job,
-            linknode=linknode_specs,
-            position_variation=position_variation_specs
-        )
+        # 将 Molecule 对象转换为 RDKit Mol 对象
+        # 这里需要根据 Molecule 对象的具体结构来实现转换
+        if hasattr(mol, 'to_rdkit'):
+            # 如果 Molecule 对象有 to_rdkit 方法
+            self.rdkit_mol = mol.to_rdkit()
+        else:
+            # 否则通过 MOL 格式字符串转换
+            mol_string = mol.write(format='mol')  # 或者使用其他合适的格式
+            self.rdkit_mol = Chem.MolFromMolBlock(mol_string)
         
-        # 生成 MOLBlock V3000 并存储在内存中
-        self.molblock_v3000 = enum_writer.write()
-        self.rdkit_mol = enum_writer.get_rdkit_mol()
+        if self.rdkit_mol is None:
+            raise ValueError("Failed to convert molecule to RDKit format.")
         
-        logger.info(f"Generated MOLBlock V3000 for enumeration job: {job.label}")
-        logger.debug(f"MOLBlock size: {len(self.molblock_v3000)} characters")
-        logger.debug(f"RDKit molecule: {self.rdkit_mol}")
-        logger.debug(f"Has modifications: {enum_writer.has_modifications()}")
+        # 生成 MOLBlock V3000 格式
+        self.molblock_v3000 = Chem.MolToV3000MolBlock(self.rdkit_mol)
         
-        # DEBUG: Print MOLBlock and exit for testing
-        print("=" * 60)
-        print("MOLBLOCK V3000 OUTPUT:")
-        print("=" * 60)
-        print(self.molblock_v3000)
-        print("=" * 60)
-        print("Conversion successful! Exiting for testing...")
-        import sys
-        sys.exit(0)
+        # 检查是否有修改需求
+        self.has_modifications = bool(linknode_specs or position_variation_specs)
         
-        # 存储 writer 实例以便后续使用
-        self.enum_writer = enum_writer
+        logger.info(f"Successfully converted molecule to RDKit format")
+        logger.debug(f"RDKit molecule atoms: {self.rdkit_mol.GetNumAtoms()}")
+        logger.debug(f"RDKit molecule bonds: {self.rdkit_mol.GetNumBonds()}")
+        logger.debug(f"MOLBlock V3000 size: {len(self.molblock_v3000)} characters")
+        logger.debug(f"Has modifications: {self.has_modifications}")
+        
+        # 存储枚举参数以供后续使用
+        self.linknode_specs = linknode_specs
+        self.position_variation_specs = position_variation_specs
 
     def _get_command(self, job):
         """Get command for execution - not needed for direct RDKit execution."""
@@ -176,7 +161,7 @@ class EnumJobRunner(JobRunner):
         logger.debug(f"RDKit molecule: {self.rdkit_mol}")
         
         # 检查是否有修改（LINKNODE 或 Position Variation）
-        has_modifications = self.enum_writer.has_modifications() if hasattr(self, 'enum_writer') else False
+        has_modifications = getattr(self, 'has_modifications', False)
         
         # 这里将实现实际的枚举逻辑
         # 使用 self.molblock_v3000 和 self.rdkit_mol 进行 RDKit 枚举操作
@@ -192,6 +177,8 @@ class EnumJobRunner(JobRunner):
             f.write(f"# RDKit molecule bonds: {self.rdkit_mol.GetNumBonds()}\n")
             f.write(f"# MOLBlock V3000 size: {len(self.molblock_v3000)} characters\n")
             f.write(f"# Has modifications: {has_modifications}\n")
+            f.write(f"# LINKNODE specs: {getattr(self, 'linknode_specs', [])}\n")
+            f.write(f"# Position variation specs: {getattr(self, 'position_variation_specs', [])}\n")
             f.write("\n")
             f.write("# Generated MOLBlock V3000:\n")
             # 写入 MOLBlock 的前几行作为示例
