@@ -1,6 +1,7 @@
 import glob
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -296,3 +297,270 @@ class EnumJobRunner(JobRunner):
         except Exception as e:
             logger.warning(f"Failed to fix aromatic bonds: {e}, returning original molecule")
             return rdkit_mol
+
+class MolBlockV3K:
+    """
+    A class for parsing and manipulating V3000 molblock content.
+    Supports adding, removing, and modifying atoms and bonds,
+    as well as outputting the current molblock string.
+    """
+    def __init__(self, molblock_str: str):
+        """
+        Initialize MolBlockV3K object and parse the V3000 molblock string.
+        Splits header, atoms, bonds, and footer sections.
+        """
+        self.raw = molblock_str
+        self.atoms = []   # List of atom information, each item is a dict
+        self.bonds = []   # List of bond information, each item is a dict
+        self.header = []  # Header information (e.g., file header, COUNTS, etc.)
+        self.footer = []  # Footer information (e.g., END CTAB, M END)
+        self._parse_molblock(molblock_str)
+
+    def _parse_molblock(self, molblock_str):
+        """
+        Parse the V3000 molblock string and separate header, atom, bond, and footer sections.
+        """
+        lines = molblock_str.splitlines()
+        in_atom = False
+        in_bond = False
+        for line in lines:
+            if line.strip().startswith('M  V30 BEGIN ATOM'):
+                in_atom = True
+                continue
+            if line.strip().startswith('M  V30 END ATOM'):
+                in_atom = False
+                continue
+            if line.strip().startswith('M  V30 BEGIN BOND'):
+                in_bond = True
+                continue
+            if line.strip().startswith('M  V30 END BOND'):
+                in_bond = False
+                continue
+            if in_atom:
+                atom = self._parse_atom_line(line)
+                if atom:
+                    self.atoms.append(atom)
+                continue
+            if in_bond:
+                bond = self._parse_bond_line(line)
+                if bond:
+                    self.bonds.append(bond)
+                continue
+            # Header and footer
+            if not in_atom and not in_bond:
+                if not self.atoms and not self.bonds:
+                    self.header.append(line)
+                else:
+                    self.footer.append(line)
+
+    def _parse_atom_line(self, line):
+        """
+        Parse an atom line and return a dictionary of atom properties.
+        Example: M  V30 1 C -1.7083 2.415 0 0
+        """
+        parts = line.strip().split()
+        if len(parts) < 6 or parts[0] != 'M' or parts[1] != 'V30':
+            return None
+        return {
+            'idx': int(parts[2]),
+            'element': parts[3],
+            'x': float(parts[4]),
+            'y': float(parts[5]),
+            'z': float(parts[6]),
+            'extra': parts[7:] if len(parts) > 7 else []
+        }
+
+    def _parse_bond_line(self, line):
+        """
+        Parse a bond line and return a dictionary of bond properties.
+        Example: M  V30 1 1 1 2
+        """
+        parts = line.strip().split()
+        if len(parts) < 6 or parts[0] != 'M' or parts[1] != 'V30':
+            return None
+        # Handle optional attributes (e.g., ENDPTS/ATTACH)
+        extra = ' '.join(parts[6:]) if len(parts) > 6 else ''
+        return {
+            'idx': int(parts[2]),
+            'type': int(parts[3]),
+            'atom1': int(parts[4]),
+            'atom2': int(parts[5]),
+            'extra': extra
+        }
+
+    # --- Operation interfaces ---
+    def add_atom(self, element, x, y, z, extra=None):
+        """
+        Add a new atom to the molblock.
+        Returns the index of the new atom.
+
+        Example:
+            idx = molblock_obj.add_atom("C", 0.0, 0.0, 0.0)
+        """
+        idx = len(self.atoms) + 1
+        atom = {
+            'idx': idx,
+            'element': element,
+            'x': x,
+            'y': y,
+            'z': z,
+            'extra': extra or []
+        }
+        self.atoms.append(atom)
+        return idx
+
+    def remove_atom(self, idx):
+        """
+        Remove an atom by its index and also remove any bonds associated with it.
+
+        Example:
+            molblock_obj.remove_atom(idx)
+        """
+        self.atoms = [a for a in self.atoms if a['idx'] != idx]
+        self.bonds = [b for b in self.bonds if b['atom1'] != idx and b['atom2'] != idx]
+
+    def modify_atom(self, idx, **kwargs):
+        """
+        Modify properties of an atom by its index.
+
+        Example:
+            molblock_obj.modify_atom(idx, x=1.0, y=2.0)
+        """
+        for atom in self.atoms:
+            if atom['idx'] == idx:
+                atom.update(kwargs)
+                break
+
+    def add_bond(self, type_, atom1, atom2, extra=''):
+        """
+        Add a new bond to the molblock.
+        Returns the index of the new bond.
+
+        Example:
+            b_idx = molblock_obj.add_bond(1, 1, 2)
+        """
+        idx = len(self.bonds) + 1
+        bond = {
+            'idx': idx,
+            'type': type_,
+            'atom1': atom1,
+            'atom2': atom2,
+            'extra': extra
+        }
+        self.bonds.append(bond)
+        return idx
+
+    def add_virtual_atom(self, x, y, z, extra=None):
+        """
+        Add a virtual atom (element='*') to the molblock.
+        Returns the index of the new virtual atom.
+
+        Example:
+            v_idx = molblock_obj.add_virtual_atom(1.0, 2.0, 0.0)
+        """
+        return self.add_atom("*", x, y, z, extra)
+
+    def remove_bond(self, idx):
+        """
+        Remove a bond by its index.
+
+        Example:
+            molblock_obj.remove_bond(b_idx)
+        """
+        self.bonds = [b for b in self.bonds if b['idx'] != idx]
+
+    def modify_bond(self, idx, **kwargs):
+        """
+        Modify properties of a bond by its index.
+
+        Example:
+            molblock_obj.modify_bond(b_idx, type=2)
+        """
+        for bond in self.bonds:
+            if bond['idx'] == idx:
+                bond.update(kwargs)
+                break
+
+    def get_molblock(self):
+        """
+        Output the current molblock string with all atoms and bonds.
+
+        Example:
+            molblock_str = molblock_obj.get_molblock()
+        """
+        lines = []
+        lines.extend(self.header)
+        lines.append('M  V30 BEGIN ATOM')
+        for atom in self.atoms:
+            atom_line = f"M  V30 {atom['idx']} {atom['element']} {atom['x']} {atom['y']} {atom['z']}"
+            if atom['extra']:
+                atom_line += ' ' + ' '.join(str(e) for e in atom['extra'])
+            lines.append(atom_line)
+        lines.append('M  V30 END ATOM')
+        lines.append('M  V30 BEGIN BOND')
+        for bond in self.bonds:
+            bond_line = f"M  V30 {bond['idx']} {bond['type']} {bond['atom1']} {bond['atom2']}"
+            if bond['extra']:
+                bond_line += f" {bond['extra']}"
+            lines.append(bond_line)
+        lines.append('M  V30 END BOND')
+        lines.extend(self.footer)
+        return '\n'.join(lines)
+
+if __name__ == "__main__":
+    # 示例 V3000 molblock 字符串
+    molblock_str = '''
+  Mrv2007 06232015292D          
+
+  0  0  0     0  0            999 V3000
+M  V30 BEGIN CTAB
+M  V30 COUNTS 9 8 0 0 0
+M  V30 BEGIN ATOM
+M  V30 1 C -1.7083 2.415 0 0
+M  V30 2 C -3.042 1.645 0 0
+M  V30 3 C -3.042 0.105 0 0
+M  V30 4 N -1.7083 -0.665 0 0
+M  V30 5 C -0.3747 0.105 0 0
+M  V30 6 C -0.3747 1.645 0 0
+M  V30 7 * -0.8192 1.3883 0 0
+M  V30 8 O -0.8192 3.6983 0 0
+M  V30 9 C 0.5145 4.4683 0 0
+M  V30 END ATOM
+M  V30 BEGIN BOND
+M  V30 1 1 1 2
+M  V30 2 2 2 3
+M  V30 3 1 3 4
+M  V30 4 2 4 5
+M  V30 5 1 5 6
+M  V30 6 2 1 6
+M  V30 7 1 7 8 ENDPTS=(3 1 5 6) ATTACH=ANY
+M  V30 8 1 8 9
+M  V30 END BOND
+M  V30 END CTAB
+M  END'''
+
+    # 创建对象
+    molblock_obj = MolBlockV3K(molblock_str)
+
+    # 打印原子和键信息
+    print("Atoms:")
+    for atom in molblock_obj.atoms:
+        print(atom)
+    print("\nBonds:")
+    for bond in molblock_obj.bonds:
+        print(bond)
+
+    # 增加一个原子
+    molblock_obj.add_atom("H", 1.0, 2.0, 0.0)
+    # 增加一个键
+    molblock_obj.add_bond(1, 1, 10)
+
+    # 输出当前 molblock
+    print("\nCurrent molblock:")
+    print(molblock_obj.get_molblock())
+
+    # 增加一个虚拟原子（如X）
+    molblock_obj.add_atom("X", 2.0, 2.0, 0.0)
+
+    print("\nAfter adding virtual atom X:")
+    print(molblock_obj.get_molblock())
