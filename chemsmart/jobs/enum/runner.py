@@ -152,15 +152,25 @@ class EnumJobRunner(JobRunner):
             logger.info("No modifications needed, enumeration completed")
             return
         
-        # 存储枚举参数以供后续使用
+        # 区分 position_variation_specs 的两种格式
+        pv_format1 = self._split_position_variation_format1(position_variation_specs)
+        pv_format2 = self._split_position_variation_format2(position_variation_specs)
+
         self.linknode_specs = linknode_specs
         self.position_variation_specs = position_variation_specs
-        
+        self.position_variation_format1 = pv_format1
+        self.position_variation_format2 = pv_format2
+
+        # 创建 MolBlockV3K 对象，方便后续操作
+        molblock_v3k_obj = MolBlockV3K(self.molblock_v3k)
+
         logger.info(f"Successfully converted molecule to RDKit format")
         logger.debug(f"RDKit molecule atoms: {self.rdkit_mol.GetNumAtoms()}")
         logger.debug(f"RDKit molecule bonds: {self.rdkit_mol.GetNumBonds()}")
         logger.debug(f"MOLBlock V3000 size: {len(self.molblock_v3k)} characters")
         logger.debug(f"Has modifications: {self.has_modifications}")
+        logger.debug(f"Position Variation Format1: {pv_format1}")
+        logger.debug(f"Position Variation Format2: {pv_format2}")
 
     def _get_command(self, job):
         """Get command for execution - not needed for direct RDKit execution."""
@@ -297,6 +307,65 @@ class EnumJobRunner(JobRunner):
         except Exception as e:
             logger.warning(f"Failed to fix aromatic bonds: {e}, returning original molecule")
             return rdkit_mol
+    
+    def _split_position_variation_format1(self, position_variation_specs):
+        """
+        Extract position variation specs of format1: bond_type:first_atom:endpt_count,...:attach_type
+        Returns a list of valid format1 strings, raises ValueError if any format is invalid.
+        Checks that the first number after the comma matches the number of following digits, and that digits do not overlap.
+        """
+        pv_format1 = []
+        for pv in position_variation_specs:
+            parts = pv.split(":")
+            if len(parts) == 4 and "," in parts[2]:
+                # 检查逗号部分
+                comma_parts = parts[2].split(",")
+                try:
+                    count = int(comma_parts[0])
+                except Exception:
+                    raise ValueError(f"Invalid count in position variation format1: {pv}")
+                digits = comma_parts[1:]
+                if len(digits) != count:
+                    raise ValueError(f"Count does not match number of digits in position variation format1: {pv}")
+                if len(set(digits)) != len(digits):
+                    raise ValueError(f"Digits overlap in position variation format1: {pv}")
+                pv_format1.append(pv)
+        return pv_format1
+
+    def _split_position_variation_format2(self, position_variation_specs):
+        """
+        Extract position variation specs of format2: bond_type:virtual_atom:group_first_atom:endpt_count,...:attach_type
+        Returns a list of valid format2 strings, raises ValueError if any format is invalid.
+        Checks that the first number after the comma matches the number of following digits, and that digits do not overlap.
+        """
+        pv_format2 = []
+        for pv in position_variation_specs:
+            parts = pv.split(":")
+            if len(parts) == 5 and "," in parts[3]:
+                comma_parts = parts[3].split(",")
+                try:
+                    count = int(comma_parts[0])
+                except Exception:
+                    raise ValueError(f"Invalid count in position variation format2: {pv}")
+                digits = comma_parts[1:]
+                if len(digits) != count:
+                    raise ValueError(f"Count does not match number of digits in position variation format2: {pv}")
+                if len(set(digits)) != len(digits):
+                    raise ValueError(f"Digits overlap in position variation format2: {pv}")
+                pv_format2.append(pv)
+        return pv_format2
+    
+    def _apply_change_to_molblock(self, molblock_v3k_obj, position_variation_format1, position_variation_format2):
+        """
+        Apply position variation information to the molblock object.
+        This method will modify molblock_v3k_obj according to the command line position variation specs.
+        Args:
+            molblock_v3k_obj: MolBlockV3K instance to be modified
+            position_variation_format1: list of format1 position variation strings
+            position_variation_format2: list of format2 position variation strings
+        """
+        
+        pass
 
 class MolBlockV3K:
     """
@@ -307,34 +376,41 @@ class MolBlockV3K:
     def __init__(self, molblock_str: str):
         """
         Initialize MolBlockV3K object and parse the V3000 molblock string.
-        Splits header, atoms, bonds, and footer sections.
+        Splits header, atoms, bonds, linknodes, and footer sections.
         """
         self.raw = molblock_str
         self.atoms = []   # List of atom information, each item is a dict
         self.bonds = []   # List of bond information, each item is a dict
+        self.linknodes = []  # List of LINKNODE information, each item is a dict or raw string
         self.header = []  # Header information (e.g., file header, COUNTS, etc.)
         self.footer = []  # Footer information (e.g., END CTAB, M END)
         self._parse_molblock(molblock_str)
 
     def _parse_molblock(self, molblock_str):
         """
-        Parse the V3000 molblock string and separate header, atom, bond, and footer sections.
+        Parse the V3000 molblock string and separate header, atom, bond, linknode, and footer sections.
         """
         lines = molblock_str.splitlines()
         in_atom = False
         in_bond = False
         for line in lines:
-            if line.strip().startswith('M  V30 BEGIN ATOM'):
+            line_stripped = line.strip()
+            if line_stripped.startswith('M  V30 BEGIN ATOM'):
                 in_atom = True
                 continue
-            if line.strip().startswith('M  V30 END ATOM'):
+            if line_stripped.startswith('M  V30 END ATOM'):
                 in_atom = False
                 continue
-            if line.strip().startswith('M  V30 BEGIN BOND'):
+            if line_stripped.startswith('M  V30 BEGIN BOND'):
                 in_bond = True
                 continue
-            if line.strip().startswith('M  V30 END BOND'):
+            if line_stripped.startswith('M  V30 END BOND'):
                 in_bond = False
+                continue
+            if line_stripped.startswith('M  V30 LINKNODE'):
+                linknode = self._parse_linknode_line(line_stripped)
+                if linknode:
+                    self.linknodes.append(linknode)
                 continue
             if in_atom:
                 atom = self._parse_atom_line(line)
@@ -352,6 +428,45 @@ class MolBlockV3K:
                     self.header.append(line)
                 else:
                     self.footer.append(line)
+
+    def _parse_linknode_line(self, line):
+        """
+        Parse a LINKNODE line and return a dictionary of linknode properties.
+        Example: M  V30 LINKNODE 1 4 2 1 2 1 5
+        """
+        parts = line.split()
+        if len(parts) < 4 or parts[0] != 'M' or parts[1] != 'V30' or parts[2] != 'LINKNODE':
+            return None
+        # 只做简单解析，全部内容存为list
+        return {'raw': line, 'values': parts[3:]}
+
+    def get_linknodes(self):
+        """
+        Return a list of all LINKNODE information in the molblock.
+        Each item is a dict with raw line and parsed values.
+        """
+        return self.linknodes.copy()
+
+    def add_linknode(self, values):
+        """
+        Add a LINKNODE entry to the molblock.
+        Args:
+            values: list of values (e.g., ['1', '4', '2', '1', '2', '1', '5'])
+        Returns:
+            The raw LINKNODE line added.
+        """
+        line = 'M  V30 LINKNODE ' + ' '.join(str(v) for v in values)
+        self.linknodes.append({'raw': line, 'values': values})
+        return line
+
+    def remove_linknode(self, idx):
+        """
+        Remove a LINKNODE entry by its index in the linknodes list.
+        Args:
+            idx: index of the LINKNODE to remove
+        """
+        if 0 <= idx < len(self.linknodes):
+            del self.linknodes[idx]
 
     def _parse_atom_line(self, line):
         """
@@ -483,7 +598,7 @@ class MolBlockV3K:
 
     def get_molblock(self):
         """
-        Output the current molblock string with all atoms and bonds.
+        Output the current molblock string with all atoms, bonds, and linknodes.
 
         Example:
             molblock_str = molblock_obj.get_molblock()
@@ -504,63 +619,120 @@ class MolBlockV3K:
                 bond_line += f" {bond['extra']}"
             lines.append(bond_line)
         lines.append('M  V30 END BOND')
+        # 输出所有LINKNODE
+        for linknode in self.linknodes:
+            lines.append(linknode['raw'])
         lines.extend(self.footer)
         return '\n'.join(lines)
+
+    def get_first_atom(self):
+        """
+        Return the information of the first atom in the molblock.
+        Returns None if no atom exists.
+        """
+        if self.atoms:
+            return self.atoms[0]
+        return None
+
+    def get_last_atom(self):
+        """
+        Return the information of the last atom in the molblock.
+        Returns None if no atom exists.
+        """
+        if self.atoms:
+            return self.atoms[-1]
+        return None
+
+    def get_virtual_atoms(self):
+        """
+        Return a list of all virtual atoms (element == '*') in the molblock.
+        Each item is a dict with atom information.
+        """
+        return [atom for atom in self.atoms if atom.get('element') == '*']
+
 
 if __name__ == "__main__":
     # 示例 V3000 molblock 字符串
     molblock_str = '''
-  Mrv2007 06232015292D          
+  Mrv2108 05132113572D          
 
   0  0  0     0  0            999 V3000
 M  V30 BEGIN CTAB
-M  V30 COUNTS 9 8 0 0 0
+M  V30 COUNTS 13 13 0 0 0
 M  V30 BEGIN ATOM
-M  V30 1 C -1.7083 2.415 0 0
-M  V30 2 C -3.042 1.645 0 0
-M  V30 3 C -3.042 0.105 0 0
-M  V30 4 N -1.7083 -0.665 0 0
-M  V30 5 C -0.3747 0.105 0 0
-M  V30 6 C -0.3747 1.645 0 0
-M  V30 7 * -0.8192 1.3883 0 0
-M  V30 8 O -0.8192 3.6983 0 0
-M  V30 9 C 0.5145 4.4683 0 0
+M  V30 1 C 1.2124 -2.4845 0 0
+M  V30 2 N 2.5461 -3.2545 0 0
+M  V30 3 C 2.5461 -4.7945 0 0
+M  V30 4 C 1.2124 -5.5645 0 0
+M  V30 5 C 1.2124 -7.1045 0 0
+M  V30 6 C -0.0335 -8.0097 0 0
+M  V30 7 O 0.4424 -9.4744 0 0
+M  V30 8 C 1.9824 -9.4744 0 0
+M  V30 9 C 2.4583 -8.0097 0 0
+M  V30 10 C -0.1212 -4.7945 0 0
+M  V30 11 C -0.1212 -3.2545 0 0
+M  V30 12 * 0.5456 -2.8695 0 0
+M  V30 13 C -0.6094 -0.869 0 0
 M  V30 END ATOM
 M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 2 2 3
-M  V30 3 1 3 4
-M  V30 4 2 4 5
-M  V30 5 1 5 6
-M  V30 6 2 1 6
-M  V30 7 1 7 8 ENDPTS=(3 1 5 6) ATTACH=ANY
-M  V30 8 1 8 9
+M  V30 1 2 1 2
+M  V30 2 1 2 3
+M  V30 3 2 3 4
+M  V30 4 1 4 5
+M  V30 5 1 6 7
+M  V30 6 1 7 8
+M  V30 7 1 8 9
+M  V30 8 1 5 9
+M  V30 9 1 4 10
+M  V30 10 2 10 11
+M  V30 11 1 1 11
+M  V30 12 1 12 13 ENDPTS=(2 11 1) ATTACH=ANY
+M  V30 13 1 5 6
 M  V30 END BOND
+M  V30 LINKNODE 1 2 2 6 5 6 7
 M  V30 END CTAB
-M  END'''
-
+M  END
+'''
     # 创建对象
     molblock_obj = MolBlockV3K(molblock_str)
 
-    # 打印原子和键信息
-    print("Atoms:")
+    print("--- Atoms ---")
     for atom in molblock_obj.atoms:
         print(atom)
-    print("\nBonds:")
+    print("\n--- Bonds ---")
     for bond in molblock_obj.bonds:
         print(bond)
+    print("\n--- LINKNODEs ---")
+    for linknode in molblock_obj.get_linknodes():
+        print(linknode)
 
-    # 增加一个原子
-    molblock_obj.add_atom("H", 1.0, 2.0, 0.0)
-    # 增加一个键
-    molblock_obj.add_bond(1, 1, 10)
+    print("\nFirst atom:", molblock_obj.get_first_atom())
+    print("Last atom:", molblock_obj.get_last_atom())
+    print("Virtual atoms:", molblock_obj.get_virtual_atoms())
 
-    # 输出当前 molblock
-    print("\nCurrent molblock:")
-    print(molblock_obj.get_molblock())
+    print("\nAdd atom H:")
+    idx_h = molblock_obj.add_atom("H", 1.0, 2.0, 0.0)
+    print("Added atom index:", idx_h)
+    print("Last atom after add:", molblock_obj.get_last_atom())
 
-    # 增加一个虚拟原子（如X）
-    molblock_obj.add_atom("X", 2.0, 2.0, 0.0)
+    print("\nAdd bond between atom 1 and new H:")
+    idx_bond = molblock_obj.add_bond(1, 1, idx_h)
+    print("Added bond index:", idx_bond)
+    print("Last bond after add:", molblock_obj.bonds[-1])
 
-    print("\nAfter adding virtual atom X:")
+    print("\nAdd virtual atom X:")
+    idx_x = molblock_obj.add_atom("X", 2.0, 2.0, 0.0)
+    print("Added atom index:", idx_x)
+    print("Virtual atoms after add:", molblock_obj.get_virtual_atoms())
+
+    print("\nAdd LINKNODE entry:")
+    new_linknode_line = molblock_obj.add_linknode(["2", "3", "2", "1", "2", "1", "4"])
+    print("Added LINKNODE:", new_linknode_line)
+    print("All LINKNODEs:", molblock_obj.get_linknodes())
+
+    print("\nRemove LINKNODE entry at index 0:")
+    molblock_obj.remove_linknode(0)
+    print("All LINKNODEs after remove:", molblock_obj.get_linknodes())
+
+    print("\nCurrent molblock string:")
     print(molblock_obj.get_molblock())
