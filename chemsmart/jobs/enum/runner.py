@@ -163,7 +163,20 @@ class EnumJobRunner(JobRunner):
 
         # 创建 MolBlockV3K 对象，方便后续操作
         molblock_v3k_obj = MolBlockV3K(self.molblock_v3k)
+        molblock_v3k_obj = self._apply_change_to_molblock(
+            molblock_v3k_obj,
+            linknode_specs=linknode_specs,
+            
+        )
 
+        # 打印molblock_v3k_obj内容并终止程序
+        print("\n===== MolBlockV3K object dump =====")
+        print("Atoms:", molblock_v3k_obj.atoms)
+        print("Bonds:", molblock_v3k_obj.bonds)
+        print("LINKNODEs:", molblock_v3k_obj.get_linknodes())
+        print("Molblock string:\n", molblock_v3k_obj.get_molblock())
+        import sys; sys.exit(0)
+        
         logger.info(f"Successfully converted molecule to RDKit format")
         logger.debug(f"RDKit molecule atoms: {self.rdkit_mol.GetNumAtoms()}")
         logger.debug(f"RDKit molecule bonds: {self.rdkit_mol.GetNumBonds()}")
@@ -354,8 +367,8 @@ class EnumJobRunner(JobRunner):
                     raise ValueError(f"Digits overlap in position variation format2: {pv}")
                 pv_format2.append(pv)
         return pv_format2
-    
-    def _apply_change_to_molblock(self, molblock_v3k_obj, position_variation_format1, position_variation_format2):
+
+    def _apply_change_to_molblock(self, molblock_v3k_obj, position_variation_format1=None, position_variation_format2=None, linknode_specs=None):
         """
         Apply position variation information to the molblock object.
         This method will modify molblock_v3k_obj according to the command line position variation specs.
@@ -363,9 +376,130 @@ class EnumJobRunner(JobRunner):
             molblock_v3k_obj: MolBlockV3K instance to be modified
             position_variation_format1: list of format1 position variation strings
             position_variation_format2: list of format2 position variation strings
+            linknode_specs: list of LINKNODE specifications
         """
-        
-        pass
+        if linknode_specs:
+            for linknode in linknode_specs:
+                # Add LINKNODE to molblock_v3k_obj
+                molblock_v3k_obj.add_linknode(linknode)
+
+        if position_variation_format2:
+            # For each position variation spec in format2, check if the specified virtual atom exists
+            virtual_atoms = molblock_v3k_obj.get_virtual_atoms()
+            # Build a set of virtual atom indices for fast lookup
+            virtual_atom_indices = set(atom['idx'] for atom in virtual_atoms)
+            for pv in position_variation_format2:
+                parts = pv.split(":")
+                if len(parts) == 5:
+                    # parts[1] is the virtual atom index (should be int)
+                    try:
+                        virtual_idx = int(parts[1])
+                    except Exception:
+                        raise ValueError(f"Invalid virtual atom index in position variation spec: {pv}")
+                    if virtual_idx not in virtual_atom_indices:
+                        raise ValueError(f"Virtual atom index {virtual_idx} specified in position variation spec '{pv}' does not exist in molblock.")
+                    
+                    # Parse bond info
+                    bond_type = int(parts[0])
+                    bond_atom1 = int(parts[2])
+                    bond_atom2 = virtual_idx
+                    comma_parts = parts[3].split(",")
+                    endpts = " ".join(comma_parts[1:])  # 跳过第一个数字
+                    extra_info = f"ENDPTS=({endpts}) ATTACH={parts[4]}"
+
+                    # Check for bond overlap (ignore order)
+                    bond_found = False
+                    for bond in molblock_v3k_obj.bonds:
+                        atoms = {bond['atom1'], bond['atom2']}
+                        if atoms == {bond_atom1, bond_atom2}:
+                            # Overlap found, append extra info
+                            bond['extra'] = extra_info
+                            bond_found = True
+                            break
+                    if not bond_found:
+                        # No overlap, create new bond
+                        molblock_v3k_obj.add_bond(
+                            type_=bond_type,
+                            atom1=bond_atom1,
+                            atom2=bond_atom2,
+                            extra=extra_info
+                        )
+        if position_variation_format1:
+            for pv in position_variation_format1:
+                parts = pv.split(":")
+                if len(parts) == 4:
+                    bond_type = int(parts[0])
+                    group_first_atom = int(parts[1])
+                    comma_parts = parts[2].split(",")
+                    count = int(comma_parts[0])
+                    endpts = [int(x) for x in comma_parts[1:]]
+                    attach_type = parts[3]
+
+                    # 查找与 group_first_atom 相连的所有原子（邻居）
+                    connected_atoms = set()
+                    for bond in molblock_v3k_obj.bonds:
+                        if bond['atom1'] == group_first_atom:
+                            connected_atoms.add(bond['atom2'])
+                        elif bond['atom2'] == group_first_atom:
+                            connected_atoms.add(bond['atom1'])
+
+                    # 要求：ENDPTS 与 group_first_atom 的邻居的重合数量必须为 1（恰好一个）
+                    endpts_set = set(endpts)
+                    overlap = sorted(a for a in connected_atoms if a in endpts_set)
+                    # 在 ENDPTS 范围内必须且只允许一个与 group_first_atom 相连的原子
+                    if len(overlap) != 1:
+                        raise ValueError(
+                            f"Expected exactly one neighbor of atom {group_first_atom} within ENDPTS {endpts} for spec '{pv}', but got {len(overlap)} (overlap={overlap})."
+                        )
+
+                    neighbor_idx = overlap[0]
+                    # 查找原子信息
+                    src_atom = None
+                    for a in molblock_v3k_obj.atoms:
+                        if a.get('idx') == neighbor_idx:
+                            src_atom = a
+                            break
+                    if src_atom is None:
+                        raise ValueError(
+                            f"Internal error: cannot find atom {neighbor_idx} to clone as virtual atom for spec '{pv}'"
+                        )
+                    # 创建与其坐标/额外属性一致的虚拟原子（元素符号改为 '*'，序号由编辑器分配）
+                    v_extra = list(src_atom.get('extra', [])) if isinstance(src_atom.get('extra'), list) else src_atom.get('extra')
+                    v_idx = molblock_v3k_obj.add_virtual_atom(src_atom['x'], src_atom['y'], src_atom['z'], extra=v_extra)
+                    logger.debug(
+                        f"Created virtual atom {v_idx} cloned from atom {neighbor_idx} (ENDPTS {endpts}) for spec '{pv}'"
+                    )
+
+                    # 1) 删除 group_first_atom 与该邻居的原有键
+                    removed = False
+                    for b in list(molblock_v3k_obj.bonds):
+                        if {b['atom1'], b['atom2']} == {group_first_atom, neighbor_idx}:
+                            molblock_v3k_obj.remove_bond(b['idx'])
+                            removed = True
+                            logger.debug(
+                                f"Removed original bond {b['idx']} between {group_first_atom} and {neighbor_idx}"
+                            )
+                            break
+                    if not removed:
+                        logger.warning(
+                            f"No existing bond found between {group_first_atom} and {neighbor_idx} to remove for spec '{pv}'"
+                        )
+
+                    # 2) 创建 group_first_atom 与虚拟原子之间的新键，并附加 position variation 信息
+                    endpts_str = ' '.join(str(x) for x in endpts)
+                    extra_info = f"ENDPTS=({endpts_str}) ATTACH={attach_type}"
+                    new_bond_idx = molblock_v3k_obj.add_bond(
+                        type_=bond_type,
+                        atom1=v_idx,
+                        atom2=group_first_atom,
+                        extra=extra_info,
+                    )
+                    logger.debug(
+                        f"Added new bond {new_bond_idx} between {group_first_atom} and virtual atom {v_idx} with '{extra_info}' for spec '{pv}'"
+                    )
+
+        return molblock_v3k_obj
+
 
 class MolBlockV3K:
     """
@@ -451,11 +585,29 @@ class MolBlockV3K:
         """
         Add a LINKNODE entry to the molblock.
         Args:
-            values: list of values (e.g., ['1', '4', '2', '1', '2', '1', '5'])
+            values: list of values (e.g., ['1', '4', '2', '1', '2', '1', '5']) or a string
         Returns:
             The raw LINKNODE line added.
         """
-        line = 'M  V30 LINKNODE ' + ' '.join(str(v) for v in values)
+        # Support both string and list input
+        if isinstance(values, str):
+            # Split by regex and join with single space, remove extra spaces
+            values = [x.strip() for x in re.split(r'[:,\s]+', values) if x.strip()]
+        # Ensure all elements are strings
+        values = [str(v) for v in values]
+        # Always use exact prefix with two spaces: 'M  V30 LINKNODE'
+        line = 'M  V30 LINKNODE ' + ' '.join(values)
+        # Ensure only single space between numbers (but keep two spaces after M)
+        # Remove any accidental extra spaces after prefix
+        line = re.sub(r'^(M)\s{2,}(V30 LINKNODE)', r'M  V30 LINKNODE', line)
+        # Remove extra spaces after prefix (if any)
+        line = re.sub(r'^(M  V30 LINKNODE)\s+', r'M  V30 LINKNODE ', line)
+        # Ensure only single space between numbers (after prefix)
+        prefix = 'M  V30 LINKNODE '
+        if line.startswith(prefix):
+            rest = line[len(prefix):]
+            rest = re.sub(r'\s+', ' ', rest)
+            line = prefix + rest
         self.linknodes.append({'raw': line, 'values': values})
         return line
 
@@ -619,7 +771,6 @@ class MolBlockV3K:
                 bond_line += f" {bond['extra']}"
             lines.append(bond_line)
         lines.append('M  V30 END BOND')
-        # 输出所有LINKNODE
         for linknode in self.linknodes:
             lines.append(linknode['raw'])
         lines.extend(self.footer)
