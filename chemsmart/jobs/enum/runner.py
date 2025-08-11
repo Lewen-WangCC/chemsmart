@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from contextlib import suppress
 from rdkit import Chem
-from rdkit.Chem import rdMolDescriptors
+from rdkit.Chem import rdMolDescriptors, rdMolEnumerator, rdFMCS, rdDepictor
 
 from chemsmart.io.molecules.structure import Molecule
 from chemsmart.jobs.runner import JobRunner
@@ -37,9 +37,9 @@ class EnumJobRunner(JobRunner):
     def __init__(self, server, scratch=None, fake=False, scratch_dir=None, **kwargs):
         # Use default SCRATCH if scratch is not explicitly set
         if scratch is None:
-            scratch = self.SCRATCH  # 默认 False
-        
-        # 如果用户强制启用 scratch，给出提示
+            scratch = self.SCRATCH  # default False
+
+        # If user forces scratch, give a warning
         if scratch and not scratch_dir:
             logger.warning(
                 "Scratch enabled for EnumJobRunner but no scratch_dir provided. "
@@ -96,7 +96,7 @@ class EnumJobRunner(JobRunner):
         logger.debug(f"LINKNODE specs: {linknode_specs}")
         logger.debug(f"Position Variation specs: {position_variation_specs}")
         
-        # 检查文件内容是否为 V3000 格式
+        # Check if file content is in V3000 format
         if (not linknode_specs and not position_variation_specs and 
             self.job_inputfile.lower().endswith('.mol')):
             try:
@@ -106,7 +106,7 @@ class EnumJobRunner(JobRunner):
                     self.molblock_v3k = file_content
                     self.has_modifications = False
                     logger.info("Directly loaded MOL file content as V3K format")
-                    return  # 直接返回，跳过后续转换
+                    return  # Directly return, skip further conversion
             except Exception as e:
                 logger.warning(f"Failed to directly read MOL file, falling back to normal conversion: {e}")
         
@@ -124,35 +124,35 @@ class EnumJobRunner(JobRunner):
         if self.rdkit_mol is None:
             raise ValueError("Molecule.to_rdkit() returned None. Check molecule validity.")
         
-        # 尝试生成 MOLBlock V3000 格式
+        # Try to generate MOLBlock V3000 format
         try:
             self.molblock_v3k = Chem.MolToV3KMolBlock(self.rdkit_mol)
             logger.info("Successfully generated MOLBlock V3000")
         except Exception as e:
             error_msg = str(e).lower()
             logger.warning(f"Failed to generate MOLBlock V3000: {e}")
-            
-            # 检查是否为芳香性键问题
+
+            # Check if this is an aromatic bond issue
             if "aromatic" in error_msg:
                 logger.info("Detected aromatic bond issue, applying fix...")
-                # 修复芳香性标记问题
+                # Fix aromatic bond marking issue
                 fixed_mol = self._fix_aromatic_bonds(self.rdkit_mol)
                 self.molblock_v3k = Chem.MolToV3KMolBlock(fixed_mol)
                 self.rdkit_mol = fixed_mol  
                 logger.info("Successfully fixed aromatic bonds and generated MOLBlock V3000")
             else:
-                # 其他类型的错误直接抛出
+                # Other errors are raised directly
                 raise ValueError(f"Failed to generate MOLBlock V3000: {e}")
-        
-        # 检查是否有修改需求
+
+        # Check if modification is needed
         self.has_modifications = bool(linknode_specs or position_variation_specs)
-        
-        # 如果没有任何修改需求，直接返回
+
+        # If no modification needed, directly return
         if not self.has_modifications:
             logger.info("No modifications needed, enumeration completed")
             return
-        
-        # 区分 position_variation_specs 的两种格式
+
+        # Distinguish between the two formats of position_variation_specs
         pv_format1 = self._split_position_variation_format1(position_variation_specs)
         pv_format2 = self._split_position_variation_format2(position_variation_specs)
 
@@ -161,22 +161,15 @@ class EnumJobRunner(JobRunner):
         self.position_variation_format1 = pv_format1
         self.position_variation_format2 = pv_format2
 
-        # 创建 MolBlockV3K 对象，方便后续操作
+        # Create MolBlockV3K object for subsequent operations
         molblock_v3k_obj = MolBlockV3K(self.molblock_v3k)
-        molblock_v3k_obj = self._apply_change_to_molblock(
+        self.molblock_v3k = self._apply_change_to_molblock(
             molblock_v3k_obj,
+            position_variation_format1=pv_format1,
+            position_variation_format2=pv_format2,
             linknode_specs=linknode_specs,
-            
         )
 
-        # 打印molblock_v3k_obj内容并终止程序
-        print("\n===== MolBlockV3K object dump =====")
-        print("Atoms:", molblock_v3k_obj.atoms)
-        print("Bonds:", molblock_v3k_obj.bonds)
-        print("LINKNODEs:", molblock_v3k_obj.get_linknodes())
-        print("Molblock string:\n", molblock_v3k_obj.get_molblock())
-        import sys; sys.exit(0)
-        
         logger.info(f"Successfully converted molecule to RDKit format")
         logger.debug(f"RDKit molecule atoms: {self.rdkit_mol.GetNumAtoms()}")
         logger.debug(f"RDKit molecule bonds: {self.rdkit_mol.GetNumBonds()}")
@@ -187,12 +180,12 @@ class EnumJobRunner(JobRunner):
 
     def _get_command(self, job):
         """Get command for execution - not needed for direct RDKit execution."""
-        # EnumJobRunner 不需要外部命令，直接使用 Python/RDKit API
+        # EnumJobRunner does not need external command, uses Python/RDKit API directly
         return None
 
     def _create_process(self, job, command, env):
         """Create process - not needed for direct RDKit execution."""
-        # EnumJobRunner 不需要创建外部进程
+        # EnumJobRunner does not need to create external process
         return None
 
     def run(self, job, **kwargs):
@@ -200,7 +193,7 @@ class EnumJobRunner(JobRunner):
         self._prerun(job)
         self._write_input(job)
         
-        # 直接执行枚举逻辑，而不是通过外部进程
+        # Directly execute enumeration logic, not via external process
         self._execute_enumeration(job, **kwargs)
         
         self._postrun(job)
@@ -209,114 +202,111 @@ class EnumJobRunner(JobRunner):
         """Execute the actual enumeration using RDKit."""
         logger.info(f"Starting enumeration for job: {job.label}")
         
-        # 检查是否有可用的 MOLBlock 和 RDKit 分子
+        # Check if MOLBlock V3000 is available
         if not hasattr(self, 'molblock_v3k') or not self.molblock_v3k:
             raise ValueError("MOLBlock V3000 not generated. Call _write_input() first.")
-        
-        if not hasattr(self, 'rdkit_mol') or not self.rdkit_mol:
-            raise ValueError("RDKit molecule not available. Call _write_input() first.")
-        
-        logger.info(f"Using MOLBlock V3000 ({len(self.molblock_v3k)} chars) and RDKit molecule")
-        logger.debug(f"RDKit molecule: {self.rdkit_mol}")
-        
-        # 检查是否有修改（LINKNODE 或 Position Variation）
+
+        logger.info(f"Using MOLBlock V3000 ({len(self.molblock_v3k)} chars)")
+
+        # Check if there are modifications (LINKNODE or Position Variation)
         has_modifications = getattr(self, 'has_modifications', False)
-        
-        # 这里将实现实际的枚举逻辑
-        # 使用 self.molblock_v3k 和 self.rdkit_mol 进行 RDKit 枚举操作
+
+        # The actual enumeration logic will be implemented here
+        # Use self.molblock_v3k for enumeration
         logger.info("Enumeration logic will be implemented here")
         logger.info(f"Modifications applied: {has_modifications}")
+
+        # Create output file containing MOLBlock information
         
-        # 创建输出文件，包含 MOLBlock 信息
-        with open(self.job_outputfile, 'w') as f:
-            f.write("# Enumerated structures will be written here\n")
-            f.write(f"# Job: {job.label}\n")
-            f.write(f"# Input molecule: {job.molecule.get_chemical_formula()}\n")
-            f.write(f"# RDKit molecule atoms: {self.rdkit_mol.GetNumAtoms()}\n")
-            f.write(f"# RDKit molecule bonds: {self.rdkit_mol.GetNumBonds()}\n")
-            f.write(f"# MOLBlock V3000 size: {len(self.molblock_v3k)} characters\n")
-            f.write(f"# Has modifications: {has_modifications}\n")
-            f.write(f"# LINKNODE specs: {getattr(self, 'linknode_specs', [])}\n")
-            f.write(f"# Position variation specs: {getattr(self, 'position_variation_specs', [])}\n")
-            f.write("\n")
-            f.write("# Generated MOLBlock V3000:\n")
-            # 写入 MOLBlock 的前几行作为示例
-            molblock_lines = self.molblock_v3k.split('\n')
-            for i, line in enumerate(molblock_lines[:10]):  # 只显示前10行
-                f.write(f"# {line}\n")
-            if len(molblock_lines) > 10:
-                f.write(f"# ... ({len(molblock_lines)-10} more lines)\n")
+        
+        
+        # with open(self.job_outputfile, 'w') as f:
+        #     f.write("# Enumerated structures will be written here\n")
+        #     f.write(f"# Job: {job.label}\n")
+        #     f.write(f"# Input molecule: {job.molecule.get_chemical_formula()}\n")
+        #     f.write(f"# MOLBlock V3000 size: {len(self.molblock_v3k)} characters\n")
+        #     f.write(f"# Has modifications: {has_modifications}\n")
+        #     f.write(f"# LINKNODE specs: {getattr(self, 'linknode_specs', [])}\n")
+        #     f.write(f"# Position variation specs: {getattr(self, 'position_variation_specs', [])}\n")
+        #     f.write("\n")
+        #     f.write("# Generated MOLBlock V3000:\n")
+        #     # Write first few lines of MOLBlock as an example
+        #     molblock_lines = self.molblock_v3k.split('\n')
+        #     for i, line in enumerate(molblock_lines[:10]):  # Only show first 10 lines
+        #         f.write(f"# {line}\n")
+        #     if len(molblock_lines) > 10:
+        #         f.write(f"# ... ({len(molblock_lines)-10} more lines)\n")
 
     def _postrun(self, job):
         """Post-processing after enumeration completion."""
         if self.scratch:
-            # 如果使用了 scratch，复制结果文件到作业目录
+            # If scratch is used, copy result file to job directory
             logger.info(f"Copying output from {self.running_directory} to {job.folder}")
-            
-            # 复制输出文件
+
+            # Copy output file
             import shutil
             target_outputfile = os.path.join(job.folder, os.path.basename(self.job_outputfile))
             shutil.copy2(self.job_outputfile, target_outputfile)
-            
-            # 清理 scratch 目录
+
+            # Clean up scratch directory
             logger.info(f"Cleaning up scratch directory: {self.running_directory}")
             shutil.rmtree(self.running_directory)
-        
+
         logger.info(f"Enumeration job {job.label} completed")
 
     def _fix_aromatic_bonds(self, rdkit_mol):
         """Fix incorrectly marked aromatic bonds in non-carbon atoms."""
         try:
-            # 创建可编辑的分子副本
+            # Create an editable copy of the molecule
             editable_mol = Chem.EditableMol(rdkit_mol)
-            
-            # 收集需要修复的键
+
+            # Collect bonds that need to be fixed
             bonds_to_fix = []
             for bond in rdkit_mol.GetBonds():
                 if bond.GetBondType() == Chem.BondType.AROMATIC:
                     atom1 = bond.GetBeginAtom()
                     atom2 = bond.GetEndAtom()
-                    # 如果不是 C-C 键但被标记为芳香键，标记为需要修复
+                    # If not a C-C bond but marked as aromatic, mark for fixing
                     if not (atom1.GetSymbol() == "C" and atom2.GetSymbol() == "C"):
                         bonds_to_fix.append((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
-            
-            # 由于我们不能直接修改键类型，使用替代方法
-            # 创建一个新的分子并重建键
+
+            # Since we can't modify bond types directly, use a workaround
+            # Create a new molecule and rebuild bonds
             new_mol = Chem.RWMol()
-            
-            # 复制所有原子
+
+            # Copy all atoms
             for atom in rdkit_mol.GetAtoms():
                 new_atom = Chem.Atom(atom.GetAtomicNum())
                 new_atom.SetFormalCharge(atom.GetFormalCharge())
                 new_mol.AddAtom(new_atom)
-            
-            # 复制构象信息
+
+            # Copy conformer information
             if rdkit_mol.GetNumConformers() > 0:
                 conf = rdkit_mol.GetConformer(0)
                 new_conf = Chem.Conformer(new_mol.GetNumAtoms())
                 for i in range(new_mol.GetNumAtoms()):
                     new_conf.SetAtomPosition(i, conf.GetAtomPosition(i))
                 new_mol.AddConformer(new_conf)
-            
-            # 重新添加键，修复芳香性问题
+
+            # Re-add bonds, fixing aromaticity issues
             for bond in rdkit_mol.GetBonds():
                 begin_idx = bond.GetBeginAtomIdx()
                 end_idx = bond.GetEndAtomIdx()
-                
+
                 if (begin_idx, end_idx) in bonds_to_fix or (end_idx, begin_idx) in bonds_to_fix:
-                    # 将错误的芳香键改为单键
+                    # Change incorrect aromatic bond to single bond
                     new_mol.AddBond(begin_idx, end_idx, Chem.BondType.SINGLE)
                     logger.debug(f"Fixed aromatic bond: {begin_idx}-{end_idx} -> SINGLE")
                 else:
-                    # 保持原有键类型
+                    # Keep original bond type
                     new_mol.AddBond(begin_idx, end_idx, bond.GetBondType())
-            
-            # 更新属性缓存
+
+            # Update property cache
             new_mol.UpdatePropertyCache(strict=False)
-            
+
             logger.info(f"Fixed {len(bonds_to_fix)} incorrectly marked aromatic bonds")
             return new_mol.GetMol()
-            
+
         except Exception as e:
             logger.warning(f"Failed to fix aromatic bonds: {e}, returning original molecule")
             return rdkit_mol
@@ -331,7 +321,7 @@ class EnumJobRunner(JobRunner):
         for pv in position_variation_specs:
             parts = pv.split(":")
             if len(parts) == 4 and "," in parts[2]:
-                # 检查逗号部分
+                # Check comma-separated section
                 comma_parts = parts[2].split(",")
                 try:
                     count = int(comma_parts[0])
@@ -398,13 +388,13 @@ class EnumJobRunner(JobRunner):
                         raise ValueError(f"Invalid virtual atom index in position variation spec: {pv}")
                     if virtual_idx not in virtual_atom_indices:
                         raise ValueError(f"Virtual atom index {virtual_idx} specified in position variation spec '{pv}' does not exist in molblock.")
-                    
+
                     # Parse bond info
                     bond_type = int(parts[0])
                     bond_atom1 = int(parts[2])
                     bond_atom2 = virtual_idx
                     comma_parts = parts[3].split(",")
-                    endpts = " ".join(comma_parts[1:])  # 跳过第一个数字
+                    endpts = " ".join(comma_parts[1:])  # skip the first number
                     extra_info = f"ENDPTS=({endpts}) ATTACH={parts[4]}"
 
                     # Check for bond overlap (ignore order)
@@ -435,7 +425,7 @@ class EnumJobRunner(JobRunner):
                     endpts = [int(x) for x in comma_parts[1:]]
                     attach_type = parts[3]
 
-                    # 查找与 group_first_atom 相连的所有原子（邻居）
+                    # Find all atoms (neighbors) connected to group_first_atom
                     connected_atoms = set()
                     for bond in molblock_v3k_obj.bonds:
                         if bond['atom1'] == group_first_atom:
@@ -443,17 +433,17 @@ class EnumJobRunner(JobRunner):
                         elif bond['atom2'] == group_first_atom:
                             connected_atoms.add(bond['atom1'])
 
-                    # 要求：ENDPTS 与 group_first_atom 的邻居的重合数量必须为 1（恰好一个）
+                    # Requirement: overlap between ENDPTS and group_first_atom's neighbors must be exactly 1
                     endpts_set = set(endpts)
                     overlap = sorted(a for a in connected_atoms if a in endpts_set)
-                    # 在 ENDPTS 范围内必须且只允许一个与 group_first_atom 相连的原子
+                    # There must be exactly one atom in ENDPTS range connected to group_first_atom
                     if len(overlap) != 1:
                         raise ValueError(
                             f"Expected exactly one neighbor of atom {group_first_atom} within ENDPTS {endpts} for spec '{pv}', but got {len(overlap)} (overlap={overlap})."
                         )
 
                     neighbor_idx = overlap[0]
-                    # 查找原子信息
+                    # Find atom information
                     src_atom = None
                     for a in molblock_v3k_obj.atoms:
                         if a.get('idx') == neighbor_idx:
@@ -463,14 +453,14 @@ class EnumJobRunner(JobRunner):
                         raise ValueError(
                             f"Internal error: cannot find atom {neighbor_idx} to clone as virtual atom for spec '{pv}'"
                         )
-                    # 创建与其坐标/额外属性一致的虚拟原子（元素符号改为 '*'，序号由编辑器分配）
+                    # Create a virtual atom with same coordinates/extra attributes (element symbol as '*', index assigned by editor)
                     v_extra = list(src_atom.get('extra', [])) if isinstance(src_atom.get('extra'), list) else src_atom.get('extra')
                     v_idx = molblock_v3k_obj.add_virtual_atom(src_atom['x'], src_atom['y'], src_atom['z'], extra=v_extra)
                     logger.debug(
                         f"Created virtual atom {v_idx} cloned from atom {neighbor_idx} (ENDPTS {endpts}) for spec '{pv}'"
                     )
 
-                    # 1) 删除 group_first_atom 与该邻居的原有键
+                    # 1) Remove the original bond between group_first_atom and this neighbor
                     removed = False
                     for b in list(molblock_v3k_obj.bonds):
                         if {b['atom1'], b['atom2']} == {group_first_atom, neighbor_idx}:
@@ -485,7 +475,7 @@ class EnumJobRunner(JobRunner):
                             f"No existing bond found between {group_first_atom} and {neighbor_idx} to remove for spec '{pv}'"
                         )
 
-                    # 2) 创建 group_first_atom 与虚拟原子之间的新键，并附加 position variation 信息
+                    # 2) Create a new bond between group_first_atom and the virtual atom, and attach position variation info
                     endpts_str = ' '.join(str(x) for x in endpts)
                     extra_info = f"ENDPTS=({endpts_str}) ATTACH={attach_type}"
                     new_bond_idx = molblock_v3k_obj.add_bond(
@@ -500,6 +490,20 @@ class EnumJobRunner(JobRunner):
 
         return molblock_v3k_obj
 
+    @staticmethod
+    def align_bundle_coords(self, bndl):
+        ps = rdFMCS.MCSParameters()
+        for m in bndl:
+            Chem.SanitizeMol(m)
+        mcs = rdFMCS.FindMCS(bndl,completeRingsOnly=True)
+        q = Chem.MolFromSmarts(mcs.smartsString)
+        rdDepictor.Compute2DCoords(q)
+        for m in bndl:
+            rdDepictor.GenerateDepictionMatching2DStructure(m,q)
+    
+    @staticmethod
+    def enumerate_from_molblock_v3k(self, molblock_v3k_obj):
+        return rdMolEnumerator.Enumerate(molblock_v3k_obj)
 
 class MolBlockV3K:
     """
@@ -571,7 +575,7 @@ class MolBlockV3K:
         parts = line.split()
         if len(parts) < 4 or parts[0] != 'M' or parts[1] != 'V30' or parts[2] != 'LINKNODE':
             return None
-        # 只做简单解析，全部内容存为list
+        # Simple parsing, store all content as list
         return {'raw': line, 'values': parts[3:]}
 
     def get_linknodes(self):
@@ -800,90 +804,3 @@ class MolBlockV3K:
         Each item is a dict with atom information.
         """
         return [atom for atom in self.atoms if atom.get('element') == '*']
-
-
-if __name__ == "__main__":
-    # 示例 V3000 molblock 字符串
-    molblock_str = '''
-  Mrv2108 05132113572D          
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 13 13 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 1.2124 -2.4845 0 0
-M  V30 2 N 2.5461 -3.2545 0 0
-M  V30 3 C 2.5461 -4.7945 0 0
-M  V30 4 C 1.2124 -5.5645 0 0
-M  V30 5 C 1.2124 -7.1045 0 0
-M  V30 6 C -0.0335 -8.0097 0 0
-M  V30 7 O 0.4424 -9.4744 0 0
-M  V30 8 C 1.9824 -9.4744 0 0
-M  V30 9 C 2.4583 -8.0097 0 0
-M  V30 10 C -0.1212 -4.7945 0 0
-M  V30 11 C -0.1212 -3.2545 0 0
-M  V30 12 * 0.5456 -2.8695 0 0
-M  V30 13 C -0.6094 -0.869 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 2 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 1 6 7
-M  V30 6 1 7 8
-M  V30 7 1 8 9
-M  V30 8 1 5 9
-M  V30 9 1 4 10
-M  V30 10 2 10 11
-M  V30 11 1 1 11
-M  V30 12 1 12 13 ENDPTS=(2 11 1) ATTACH=ANY
-M  V30 13 1 5 6
-M  V30 END BOND
-M  V30 LINKNODE 1 2 2 6 5 6 7
-M  V30 END CTAB
-M  END
-'''
-    # 创建对象
-    molblock_obj = MolBlockV3K(molblock_str)
-
-    print("--- Atoms ---")
-    for atom in molblock_obj.atoms:
-        print(atom)
-    print("\n--- Bonds ---")
-    for bond in molblock_obj.bonds:
-        print(bond)
-    print("\n--- LINKNODEs ---")
-    for linknode in molblock_obj.get_linknodes():
-        print(linknode)
-
-    print("\nFirst atom:", molblock_obj.get_first_atom())
-    print("Last atom:", molblock_obj.get_last_atom())
-    print("Virtual atoms:", molblock_obj.get_virtual_atoms())
-
-    print("\nAdd atom H:")
-    idx_h = molblock_obj.add_atom("H", 1.0, 2.0, 0.0)
-    print("Added atom index:", idx_h)
-    print("Last atom after add:", molblock_obj.get_last_atom())
-
-    print("\nAdd bond between atom 1 and new H:")
-    idx_bond = molblock_obj.add_bond(1, 1, idx_h)
-    print("Added bond index:", idx_bond)
-    print("Last bond after add:", molblock_obj.bonds[-1])
-
-    print("\nAdd virtual atom X:")
-    idx_x = molblock_obj.add_atom("X", 2.0, 2.0, 0.0)
-    print("Added atom index:", idx_x)
-    print("Virtual atoms after add:", molblock_obj.get_virtual_atoms())
-
-    print("\nAdd LINKNODE entry:")
-    new_linknode_line = molblock_obj.add_linknode(["2", "3", "2", "1", "2", "1", "4"])
-    print("Added LINKNODE:", new_linknode_line)
-    print("All LINKNODEs:", molblock_obj.get_linknodes())
-
-    print("\nRemove LINKNODE entry at index 0:")
-    molblock_obj.remove_linknode(0)
-    print("All LINKNODEs after remove:", molblock_obj.get_linknodes())
-
-    print("\nCurrent molblock string:")
-    print(molblock_obj.get_molblock())
