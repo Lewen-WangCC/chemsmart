@@ -68,7 +68,11 @@ def click_emum_jobtype_options(f):
         type=str,
         multiple=True,
         default=None,
-        help="Position Variation specification: 'bond_type:first_atom:endpt_count,endpt1,endpt2,...:attach_type' (e.g., '1:8:3,1,5,6:ANY')",
+        help=(
+            "Position Variation specification:"
+            "\n  1. 'bond_type:group_first_atom:endpt_count,endpt1,endpt2,...:attach_type' (e.g., '1:8:3,1,5,6:ANY')"
+            "\n  2. 'bond_type:virtual_atom:group_first_atom:endpt_count,endpt1,endpt2,...:attach_type' (e.g., '1:7:8:3,1,5,6:ANY')"
+        ),
     )
     @functools.wraps(f)
     def wrapper_enum_jobtype_options(*args, **kwargs):
@@ -187,6 +191,7 @@ def enum(
     enum_job = EnumJob(
         molecule=molecule,
         label=label,
+        output_dir=output_dir,
         linknode_specs=linknode_specs,
         position_variation_specs=position_variation_specs,
         **kwargs,

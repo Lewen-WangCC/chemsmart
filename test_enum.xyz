@@ -1,0 +1,22 @@
+# Enumerated structures will be written here
+# Job: test_enum
+# Input molecule: C15H19FO
+# RDKit molecule atoms: 36
+# RDKit molecule bonds: 37
+# MOLBlock V3000 size: 2308 characters
+# Has modifications: False
+# LINKNODE specs: []
+# Position variation specs: []
+
+# Generated MOLBlock V3000:
+# 
+#      RDKit          3D
+# 
+#   0  0  0  0  0  0  0  0  0  0999 V3000
+# M  V30 BEGIN CTAB
+# M  V30 COUNTS 36 37 0 0 0
+# M  V30 BEGIN ATOM
+# M  V30 1 C 0.011470 3.471990 1.117370 0
+# M  V30 2 C 0.214000 2.039370 0.650650 0
+# M  V30 3 C 1.656090 1.790410 1.079930 0
+# ... (76 more lines)

@@ -18,6 +18,7 @@ class EnumJob(Job):
         self, 
         molecule, 
         label=None, 
+        output_dir=None,
         jobrunner=None,
         linknode_specs=None, 
         position_variation_specs=None, 
@@ -32,12 +33,25 @@ class EnumJob(Job):
                 f"Molecule must be instance of Molecule for {self}, but is {molecule} instead!"
             )
         
+        if output_dir:
+            self.folder = output_dir
+            self._output_dir = output_dir
         # 存储枚举相关参数
         self.linknode_specs = linknode_specs or []
         self.position_variation_specs = position_variation_specs or []
         
         logger.debug(f"EnumJob created with LINKNODE specs: {self.linknode_specs}")
         logger.debug(f"EnumJob created with Position Variation specs: {self.position_variation_specs}")
+
+        if label is None:
+            label = molecule.get_chemical_formula(empirical=True)
+        self.label = label
+
+
+    @property
+    def output_dir(self):
+        """Output directory for enumeration results."""
+        return self.output_dir
 
     @property
     def inputfile(self):
@@ -83,6 +97,7 @@ class EnumJob(Job):
         filename,
         index="-1",
         label=None,
+        output_dir=None,
         jobrunner=None,
         linknode_specs=None,
         position_variation_specs=None,
@@ -123,6 +138,7 @@ class EnumJob(Job):
         return cls(
             molecule=molecules,
             label=label,
+            output_dir=output_dir,
             jobrunner=jobrunner,
             linknode_specs=linknode_specs,
             position_variation_specs=position_variation_specs,
@@ -131,7 +147,14 @@ class EnumJob(Job):
 
     @classmethod
     def from_pubchem(
-        cls, identifier, label=None, jobrunner=None, linknode_specs=None, position_variation_specs=None, **kwargs
+        cls, 
+        identifier, 
+        label=None, 
+        output_dir=None,
+        jobrunner=None, 
+        linknode_specs=None, 
+        position_variation_specs=None, 
+        **kwargs,
     ):
         """Create an EnumJob from a PubChem identifier."""
         molecules = Molecule.from_pubchem(identifier=identifier)
@@ -155,6 +178,7 @@ class EnumJob(Job):
         return cls(
             molecule=molecules,
             label=label,
+            output_dir=output_dir,
             jobrunner=jobrunner,
             linknode_specs=linknode_specs,
             position_variation_specs=position_variation_specs,

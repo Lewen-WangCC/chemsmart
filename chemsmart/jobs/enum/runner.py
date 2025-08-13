@@ -168,15 +168,9 @@ class EnumJobRunner(JobRunner):
             position_variation_format1=pv_format1,
             position_variation_format2=pv_format2,
             linknode_specs=linknode_specs,
-        )
+        ).get_molblock()
 
         logger.info(f"Successfully converted molecule to RDKit format")
-        logger.debug(f"RDKit molecule atoms: {self.rdkit_mol.GetNumAtoms()}")
-        logger.debug(f"RDKit molecule bonds: {self.rdkit_mol.GetNumBonds()}")
-        logger.debug(f"MOLBlock V3000 size: {len(self.molblock_v3k)} characters")
-        logger.debug(f"Has modifications: {self.has_modifications}")
-        logger.debug(f"Position Variation Format1: {pv_format1}")
-        logger.debug(f"Position Variation Format2: {pv_format2}")
 
     def _get_command(self, job):
         """Get command for execution - not needed for direct RDKit execution."""
@@ -206,8 +200,6 @@ class EnumJobRunner(JobRunner):
         if not hasattr(self, 'molblock_v3k') or not self.molblock_v3k:
             raise ValueError("MOLBlock V3000 not generated. Call _write_input() first.")
 
-        logger.info(f"Using MOLBlock V3000 ({len(self.molblock_v3k)} chars)")
-
         # Check if there are modifications (LINKNODE or Position Variation)
         has_modifications = getattr(self, 'has_modifications', False)
 
@@ -217,25 +209,22 @@ class EnumJobRunner(JobRunner):
         logger.info(f"Modifications applied: {has_modifications}")
 
         # Create output file containing MOLBlock information
-        
-        
-        
-        # with open(self.job_outputfile, 'w') as f:
-        #     f.write("# Enumerated structures will be written here\n")
-        #     f.write(f"# Job: {job.label}\n")
-        #     f.write(f"# Input molecule: {job.molecule.get_chemical_formula()}\n")
-        #     f.write(f"# MOLBlock V3000 size: {len(self.molblock_v3k)} characters\n")
-        #     f.write(f"# Has modifications: {has_modifications}\n")
-        #     f.write(f"# LINKNODE specs: {getattr(self, 'linknode_specs', [])}\n")
-        #     f.write(f"# Position variation specs: {getattr(self, 'position_variation_specs', [])}\n")
-        #     f.write("\n")
-        #     f.write("# Generated MOLBlock V3000:\n")
-        #     # Write first few lines of MOLBlock as an example
-        #     molblock_lines = self.molblock_v3k.split('\n')
-        #     for i, line in enumerate(molblock_lines[:10]):  # Only show first 10 lines
-        #         f.write(f"# {line}\n")
-        #     if len(molblock_lines) > 10:
-        #         f.write(f"# ... ({len(molblock_lines)-10} more lines)\n")
+        # print("=="*10)
+        # print(type(self.molblock_v3k))
+        # print(self.molblock_v3k)
+        # exit()
+        bundle = self.enumerate_from_molblock_v3k(Chem.MolFromMolBlock(self.molblock_v3k))
+        self.align_bundle_coords(bundle)
+
+        for index, mol in enumerate(bundle):
+            logger.info(f"Enumerated molecule {index}: {mol}")
+            m = Chem.Mol(mol)
+            xyz_path = os.path.join(job.folder, f"{job.label}_enum_{index}.xyz")
+            try:
+                Chem.MolToXYZFile(m, xyz_path)
+                logger.info(f"Wrote enumerated molecule {index} to {xyz_path}")
+            except Exception as e:
+                logger.error(f"Failed to write enumerated molecule {index} to XYZ file: {e}")
 
     def _postrun(self, job):
         """Post-processing after enumeration completion."""
@@ -491,7 +480,7 @@ class EnumJobRunner(JobRunner):
         return molblock_v3k_obj
 
     @staticmethod
-    def align_bundle_coords(self, bndl):
+    def align_bundle_coords(bndl):
         ps = rdFMCS.MCSParameters()
         for m in bndl:
             Chem.SanitizeMol(m)
@@ -502,7 +491,7 @@ class EnumJobRunner(JobRunner):
             rdDepictor.GenerateDepictionMatching2DStructure(m,q)
     
     @staticmethod
-    def enumerate_from_molblock_v3k(self, molblock_v3k_obj):
+    def enumerate_from_molblock_v3k(molblock_v3k_obj):
         return rdMolEnumerator.Enumerate(molblock_v3k_obj)
 
 class MolBlockV3K:
