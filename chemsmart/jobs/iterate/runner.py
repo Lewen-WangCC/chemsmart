@@ -27,11 +27,11 @@ pt = PeriodicTable()
 logger = logging.getLogger(__name__)
 
 
-class EnumJobRunner(JobRunner):
-    """JobRunner for molecular enumeration using RDKit."""
-    
-    JOBTYPES = ["enum"]
-    PROGRAM = "Enum"
+class IterateJobRunner(JobRunner):
+    """JobRunner for molecular iteration using RDKit."""
+
+    JOBTYPES = ["iterate"]
+    PROGRAM = "Iterate"
     FAKE = False
     SCRATCH = False
     
@@ -43,8 +43,8 @@ class EnumJobRunner(JobRunner):
         # If user forces scratch, give a warning
         if scratch and not scratch_dir:
             logger.warning(
-                "Scratch enabled for EnumJobRunner but no scratch_dir provided. "
-                "Enumeration typically doesn't benefit from scratch usage."
+                "Scratch enabled for IterateJobRunner but no scratch_dir provided. "
+                "Iteration typically doesn't benefit from scratch usage."
             )
         
         super().__init__(
@@ -64,15 +64,15 @@ class EnumJobRunner(JobRunner):
 
     @property
     def executable(self):
-        """EnumJobRunner doesn't need external executable, returns None."""
+        """IterateJobRunner doesn't need external executable, returns None."""
         return None
 
     def _prerun(self, job):
-        """Prepare for enumeration job execution."""
+        """Prepare for iteration job execution."""
         self._assign_variables(job)
 
     def _assign_variables(self, job):
-        """Set up file paths and directories for enumeration output."""
+        """Set up file paths and directories for iteration output."""
         # Set up file paths and directories
         self.running_directory = job.folder
         logger.debug(f"Running directory: {self.running_directory}")
@@ -81,19 +81,19 @@ class EnumJobRunner(JobRunner):
         self.job_outputfile = os.path.abspath(job.outputfile)
 
     def _write_input(self, job):
-        """Prepare input for enumeration - convert molecule to RDKit format and 
+        """Prepare input for iteration - convert molecule to RDKit format and
         modify the MOLBlock information according to linknode_specs and position_variation_specs."""
         
         # obtain the molecule from the job
         mol = job.molecule
         if not mol:
-            raise ValueError("No molecule provided for enumeration job.")
-        
+            raise ValueError("No molecule provided for iteration job.")
+
         # obtain linknode and position_variation parameters
         linknode_specs = getattr(job, 'linknode_specs', [])
         position_variation_specs = getattr(job, 'position_variation_specs', [])
-        
-        logger.info(f"Converting molecule to RDKit format for enumeration job: {job.label}")
+
+        logger.info(f"Converting molecule to RDKit format for iteration job: {job.label}")
         logger.debug(f"LINKNODE specs: {linknode_specs}")
         logger.debug(f"Position Variation specs: {position_variation_specs}")
         
@@ -150,7 +150,7 @@ class EnumJobRunner(JobRunner):
 
         # If no modification needed, directly return
         if not self.has_modifications:
-            logger.info("No modifications needed, enumeration completed")
+            logger.info("No modifications needed, iteration completed")
             return
 
         # Distinguish between the two formats of position_variation_specs
@@ -175,28 +175,28 @@ class EnumJobRunner(JobRunner):
 
     def _get_command(self, job):
         """Get command for execution - not needed for direct RDKit execution."""
-        # EnumJobRunner does not need external command, uses Python/RDKit API directly
+        # IterateJobRunner does not need external command, uses Python/RDKit API directly
         return None
 
     def _create_process(self, job, command, env):
         """Create process - not needed for direct RDKit execution."""
-        # EnumJobRunner does not need to create external process
+        # IterateJobRunner does not need to create external process
         return None
 
     def run(self, job, **kwargs):
-        """Execute the enumeration job."""
+        """Execute the iteration job."""
         self._prerun(job)
         self._write_input(job)
-        
-        # Directly execute enumeration logic, not via external process
-        self._execute_enumeration(job, **kwargs)
+
+        # Directly execute iteration logic, not via external process
+        self._execute_iteration(job, **kwargs)
         
         self._postrun(job)
 
-    def _execute_enumeration(self, job, **kwargs):
-        """Execute the actual enumeration using RDKit."""
-        logger.info(f"Starting enumeration for job: {job.label}")
-        
+    def _execute_iteration(self, job, **kwargs):
+        """Execute the actual iteration using RDKit."""
+        logger.info(f"Starting iteration for job: {job.label}")
+
         # Check if MOLBlock V3000 is available
         if not hasattr(self, 'molblock_v3k') or not self.molblock_v3k:
             raise ValueError("MOLBlock V3000 not generated. Call _write_input() first.")
@@ -204,9 +204,9 @@ class EnumJobRunner(JobRunner):
         # Check if there are modifications (LINKNODE or Position Variation)
         has_modifications = getattr(self, 'has_modifications', False)
 
-        # The actual enumeration logic will be implemented here
-        # Use self.molblock_v3k for enumeration
-        logger.info("Enumeration logic will be implemented here")
+        # The actual iteration logic will be implemented here
+        # Use self.molblock_v3k for iteration
+        logger.info("Iteration logic will be implemented here")
         logger.info(f"Modifications applied: {has_modifications}")
 
         # Create output file containing MOLBlock information
@@ -214,21 +214,21 @@ class EnumJobRunner(JobRunner):
         # print(type(self.molblock_v3k))
         # print(self.molblock_v3k)
         # exit()
-        bundle = self.enumerate_from_molblock_v3k(Chem.MolFromMolBlock(self.molblock_v3k))
+        bundle = self.iterate_from_molblock_v3k(Chem.MolFromMolBlock(self.molblock_v3k))
         self.align_bundle_coords(bundle)
 
         for index, mol in enumerate(bundle):
-            logger.info(f"Enumerated molecule {index}: {mol}")
+            logger.info(f"Iterate molecule {index}: {mol}")
             m = Chem.Mol(mol)
-            xyz_path = os.path.join(job.folder, f"{job.label}_enum_{index}.xyz")
+            xyz_path = os.path.join(job.folder, f"{job.label}_iterate_{index}.xyz")
             try:
                 Chem.MolToXYZFile(m, xyz_path)
-                logger.info(f"Wrote enumerated molecule {index} to {xyz_path}")
+                logger.info(f"Wrote iterated molecule {index} to {xyz_path}")
             except Exception as e:
-                logger.error(f"Failed to write enumerated molecule {index} to XYZ file: {e}")
+                logger.error(f"Failed to write iterated molecule {index} to XYZ file: {e}")
 
     def _postrun(self, job):
-        """Post-processing after enumeration completion."""
+        """Post-processing after iteration completion."""
         if self.scratch:
             # If scratch is used, copy result file to job directory
             logger.info(f"Copying output from {self.running_directory} to {job.folder}")
@@ -242,7 +242,7 @@ class EnumJobRunner(JobRunner):
             logger.info(f"Cleaning up scratch directory: {self.running_directory}")
             shutil.rmtree(self.running_directory)
 
-        logger.info(f"Enumeration job {job.label} completed")
+        logger.info(f"Iteration job {job.label} completed")
 
     def _fix_aromatic_bonds(self, rdkit_mol):
         """Fix incorrectly marked aromatic bonds in non-carbon atoms."""
@@ -492,5 +492,5 @@ class EnumJobRunner(JobRunner):
             rdDepictor.GenerateDepictionMatching2DStructure(m,q)
     
     @staticmethod
-    def enumerate_from_molblock_v3k(molblock_v3k_obj):
+    def iterate_from_molblock_v3k(molblock_v3k_obj):
         return rdMolEnumerator.Enumerate(molblock_v3k_obj)

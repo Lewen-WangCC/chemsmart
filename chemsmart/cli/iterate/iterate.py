@@ -17,35 +17,35 @@ from chemsmart.utils.cli import MyCommand
 logger = logging.getLogger(__name__)
 
 
-def click_enum_settings_options(f):
-    """Common click options for enumeration settings."""
+def click_iterate_settings_options(f):
+    """Common click options for iteration settings."""
     @click.option(
         "-f",
         "--filename",
         type=str,
         default=None,
-        help="Filename containing molecule structure for enumeration (SDF, MOL, XYZ, etc.)",
+        help="Filename containing molecule structure for iteration (SDF, MOL, XYZ, etc.)",
     )
     @click.option(
         "-l",
         "--label",
         type=str,
         default=None,
-        help="Label for enumeration job (without extension). Used for output file naming.",
+        help="Label for iteration job (without extension). Used for output file naming.",
     )
     @click.option(
         "-a",
         "--append-label",
         type=str,
         default=None,
-        help="Name to be appended to base filename for the enumeration job.",
+        help="Name to be appended to base filename for the iteration job.",
     )
     @click.option(
         "-o",
         "--output-dir",
         type=str,
         default=None,
-        help="Output directory for enumerated structures. If not specified, uses current working directory.",
+        help="Output directory for iterated structures. If not specified, uses current working directory.",
     )
     
     @functools.wraps(f)
@@ -54,8 +54,8 @@ def click_enum_settings_options(f):
 
     return wrapper_common_options
 
-def click_emum_jobtype_options(f):
-    """Common click options for enumeration job type."""
+def click_iterate_jobtype_options(f):
+    """Common click options for iteration job type."""
     @click.option(
         "--linknode",
         type=str,
@@ -75,15 +75,15 @@ def click_emum_jobtype_options(f):
         ),
     )
     @functools.wraps(f)
-    def wrapper_enum_jobtype_options(*args, **kwargs):
+    def wrapper_iterate_jobtype_options(*args, **kwargs):
         return f(*args, **kwargs)
 
-    return wrapper_enum_jobtype_options
+    return wrapper_iterate_jobtype_options
 
 
 @click.command(cls=MyCommand)  # 改为 command 而不是 group
-@click_enum_settings_options
-@click_emum_jobtype_options
+@click_iterate_settings_options
+@click_iterate_jobtype_options
 @click.option(
     "-P",
     "--pubchem",
@@ -92,7 +92,7 @@ def click_emum_jobtype_options(f):
     help="Queries structure from PubChem using name, smiles, cid and conformer information.",
 )
 @click.pass_context
-def enum(
+def iterate(
     ctx,
     filename,
     label,
@@ -135,7 +135,7 @@ def enum(
     # update labels - exactly same logic as gaussian module
     if label is not None and append_label is not None:
         raise ValueError(
-            "Only give enum input filename or name to be appended, but not both!"
+            "Only give iterate input filename or name to be appended, but not both!"
         )
     if append_label is not None:
         label = os.path.splitext(os.path.basename(filename))[0]
@@ -146,10 +146,10 @@ def enum(
         elif pubchem:
             label = pubchem.replace(' ', '_')
         else:
-            label = "enum"
-        label = f"{label}_enum"
-    
-    logger.debug(f"Enumeration job label: {label}")
+            label = "iterate"
+        label = f"{label}_iterate"
+
+    logger.debug(f"Iteration job label: {label}")
 
     # handle output directory
     if output_dir is None:
@@ -175,20 +175,20 @@ def enum(
         for pv in position_variation:
             logger.debug(f"Processing position variation: {pv}")
 
-    # 直接创建和运行 EnumJob，而不需要子命令
-    logger.info("Starting enumeration job execution")
-    
-    # 获取分子
+    # Directly create and run IterateJob without subcommands
+    logger.info("Starting iteration job execution")
+
+    # obtain molecule
     molecule = molecules[-1] if isinstance(molecules, list) else molecules
-    
-    # 转换参数格式
+
+    # convert parameter format
     linknode_specs = list(linknode) if linknode else []
     position_variation_specs = list(position_variation) if position_variation else []
     
-    # 创建 EnumJob
-    from chemsmart.jobs.enum.job import EnumJob
-    
-    enum_job = EnumJob(
+    # create IterateJob
+    from chemsmart.jobs.iterate.job import IterateJob
+
+    iterate_job = IterateJob(
         molecule=molecule,
         label=label,
         output_dir=output_dir,
@@ -196,30 +196,30 @@ def enum(
         position_variation_specs=position_variation_specs,
         **kwargs,
     )
-    
-    logger.info(f"Created EnumJob: {enum_job}")
-    logger.debug(f"LINKNODE specs: {enum_job.linknode_specs}")
-    logger.debug(f"Position Variation specs: {enum_job.position_variation_specs}")
-    
-    # 创建 JobRunner
+
+    logger.info(f"Created IterateJob: {iterate_job}")
+    logger.debug(f"LINKNODE specs: {iterate_job.linknode_specs}")
+    logger.debug(f"Position Variation specs: {iterate_job.position_variation_specs}")
+
+    # create JobRunner
     from chemsmart.jobs.runner import JobRunner
     from chemsmart.settings.server import Server
     
     server = Server.current()
     jobrunner = JobRunner.from_job(
-        job=enum_job,
+        job=iterate_job,
         server=server,
-        scratch=False,  # EnumJobRunner 默认不使用 scratch
+        scratch=False,  # IterateJobRunner don't use scratch by default
         fake=False,
     )
     logger.info(f"Created JobRunner: {jobrunner}")
-    
-    # 设置 jobrunner
-    enum_job.jobrunner = jobrunner
-    
-    # 运行作业
-    logger.info("Executing enumeration job...")
-    enum_job._run()
-    
-    logger.info("Enumeration job completed successfully")
-    return enum_job
+
+    # Set jobrunner
+    iterate_job.jobrunner = jobrunner
+
+    # Run job
+    logger.info("Executing iteration job...")
+    iterate_job._run()
+
+    logger.info("Iteration job completed successfully")
+    return iterate_job
