@@ -7,7 +7,7 @@ import click
 from chemsmart.cli.jobrunner import click_jobrunner_options
 from chemsmart.cli.logger import logger_options
 from chemsmart.cli.subcommands import subcommands
-from chemsmart.cli.enum import enum
+from chemsmart.cli.iterate import iterate
 from chemsmart.jobs.job import Job
 from chemsmart.jobs.runner import JobRunner
 from chemsmart.settings.server import Server
@@ -110,7 +110,7 @@ def process_pipeline(ctx, *args, **kwargs):
 
 for subcommand in subcommands:
     run.add_command(subcommand)
-run.add_command(enum)
+run.add_command(iterate)
 
 if __name__ == "__main__":
     obj: dict[str, str] = {}
