@@ -91,6 +91,11 @@ class IterateJobRunner(JobRunner):
 
         # obtain linknode and position_variation parameters
         linknode_specs = getattr(job, 'linknode_specs', [])
+        # Parse command-line LINKNODE specs into structured dicts used by MolBlockV3K.add_linknode
+        if isinstance(linknode_specs, (list, tuple)):
+            parsed_linknodes = self._parse_linknode_specs(linknode_specs)
+            linknode_specs = parsed_linknodes
+            self.linknode_specs = parsed_linknodes  # optionally for later use
         position_variation_specs = getattr(job, 'position_variation_specs', [])
 
         logger.info(f"Converting molecule to RDKit format for iteration job: {job.label}")
@@ -377,6 +382,53 @@ class IterateJobRunner(JobRunner):
                 pv_format2.append(pv)
         return pv_format2
 
+    def _parse_linknode_specs(self, specs):
+        """Parse LINKNODE specs from CLI (list/tuple of strings) into structured dicts.
+        Input examples:
+            ["1:2:2,20,19,20,21", "1:2:2,1,2,1,6"]
+        Output example:
+            [{"minrep":1, "maxrep":2, "nbonds":2, "atoms":[20,19,20,21]}, ...]
+        """
+        parsed = []
+        if not specs:
+            return parsed
+        for s in specs:
+            # Expect each s is a string like 'minrep:maxrep:nbonds,in1,out1,in2,out2,...'
+            s = s.strip()
+            if not s:
+                continue
+            parts = s.split(":", 2)
+            if len(parts) != 3:
+                continue
+            try:
+                minrep = int(parts[0].strip())
+                maxrep = int(parts[1].strip())
+            except Exception:
+                continue
+            tail = parts[2].strip()
+            if not tail:
+                continue
+            # tail like '2,20,19,20,21' => nbonds + flattened atoms
+            tail_parts = [t for t in re.split(r"[\s,]+", tail) if t]
+            if not tail_parts:
+                continue
+            try:
+                nbonds = int(tail_parts[0])
+            except Exception:
+                continue
+            atom_tokens = tail_parts[1:]
+            try:
+                atoms = [int(x) for x in atom_tokens]
+            except Exception:
+                continue
+            parsed.append({
+                "minrep": minrep,
+                "maxrep": maxrep,
+                "nbonds": nbonds,
+                "atoms": atoms,
+            })
+        return parsed
+    
     def _apply_change_to_molblock(self, molblock_v3k_obj, position_variation_format1=None, position_variation_format2=None, linknode_specs=None):
         """
         Apply position variation information to the molblock object.
@@ -388,9 +440,9 @@ class IterateJobRunner(JobRunner):
             linknode_specs: list of LINKNODE specifications
         """
         if linknode_specs:
-            for linknode in linknode_specs:
-                # Add LINKNODE to molblock_v3k_obj
-                molblock_v3k_obj.add_linknode(linknode)
+            for ln in linknode_specs:
+                # ln is a structured dict: {'minrep','maxrep','nbonds','atoms'}
+                molblock_v3k_obj.add_linknode(ln['minrep'], ln['maxrep'], ln['nbonds'], ln['atoms'])
 
         if position_variation_format2:
             # For each position variation spec in format2, check if the specified virtual atom exists

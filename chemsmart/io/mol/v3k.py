@@ -113,33 +113,62 @@ class MolBlockV3K:
         except Exception:
             return None
 
-    def get_linknodes(self):
+    def get_linknodes_list(self):
         """
         Return a shallow copy of the list of all LINKNODE entries (structured dicts).
         """
         return self.linknodes.copy()
 
-    def add_linknode(self, values):
+    def get_linknode_count(self):
         """
-        Add a LINKNODE entry to the molblock.
+        Return the number of LINKNODE entries currently stored.
+        This is equivalent to the number of linknode entries parsed or added.
+        """
+        return len(self.linknodes)
+
+    def get_linknode_by_idx(self, idx):
+        """
+        Return the LINKNODE entry (structured dict) matching the internal idx.
         Args:
-            values: string or list; parses values into structured dict.
+            idx (int): internal 'idx' of the LINKNODE
         Returns:
-            The structured linknode dict added.
+            dict | None: the LINKNODE dict if found, else None
         """
-        # Accept string or list; normalize whitespace/commas, coerce to ints.
-        if isinstance(values, str):
-            values = [x.strip() for x in re.split(r'[:,\s]+', values) if x.strip()]
-        # If values is a list of strings, coerce to ints
-        values = [int(v) for v in values]
-        if len(values) < 4:
-            raise ValueError("LINKNODE requires at least 4 values: minrep, maxrep, nbonds, atoms...")
-        minrep = int(values[0])
-        maxrep = int(values[1])
-        nbonds = int(values[2])
-        atoms = [int(v) for v in values[3:]]
-        idx = len(self.linknodes) + 1
-        ln = {'idx': idx, 'minrep': minrep, 'maxrep': maxrep, 'nbonds': nbonds, 'atoms': atoms}
+        try:
+            target = int(idx)
+        except Exception:
+            return None
+        for ln in self.linknodes:
+            if isinstance(ln, dict) and ln.get('idx') == target:
+                return ln
+        return None
+
+    def add_linknode(self, minrep, maxrep, nbonds, atoms):
+        """
+        Add a LINKNODE entry using structured parameters, consistent with self.linknodes storage.
+        Args:
+            minrep (int): minimal repetitions
+            maxrep (int): maximal repetitions
+            nbonds (int): number of bond pairs defined
+            atoms (Sequence[int]): flat list of atom indices [in1, out1, in2, out2, ...]
+        Returns:
+            dict: the structured LINKNODE dict added (with auto 'idx').
+        """
+        m = int(minrep)
+        M = int(maxrep)
+        n = int(nbonds)
+        # strict validation for atoms
+        if not isinstance(atoms, list):
+            raise ValueError("atoms must be provided as a list of integers")
+        atoms = [int(v) for v in atoms]
+
+        ln = {
+            'idx': len(self.linknodes) + 1,
+            'minrep': m,
+            'maxrep': M,
+            'nbonds': n,
+            'atoms': atoms,
+        }
         self.linknodes.append(ln)
         return ln
 
@@ -159,6 +188,42 @@ class MolBlockV3K:
             # Resequence idx fields
             for j, ln in enumerate(self.linknodes, start=1):
                 ln['idx'] = j
+
+    def modify_linknode(self, idx, minrep=None, maxrep=None, nbonds=None, atoms=None):
+        """
+        Modify properties of a LINKNODE entry by its internal idx.
+        Only non-None arguments will be updated.
+        Args:
+            idx (int): internal 'idx' of the LINKNODE to modify
+            minrep (int|None): new minrep if provided
+            maxrep (int|None): new maxrep if provided
+            nbonds (int|None): new nbonds if provided
+            atoms (list[int]|None): new atoms list if provided
+        Returns:
+            dict | None: the updated LINKNODE dict, or None if not found
+        """
+        target = self.get_linknode_by_idx(idx)
+        if not target:
+            return None
+
+        if minrep is not None:
+            if not isinstance(minrep, int):
+                raise ValueError("minrep must be an integer")
+            target['minrep'] = minrep
+        if maxrep is not None:
+            if not isinstance(maxrep, int):
+                raise ValueError("maxrep must be an integer")
+            target['maxrep'] = maxrep
+        if nbonds is not None:
+            if not isinstance(nbonds, int):
+                raise ValueError("nbonds must be an integer")
+            target['nbonds'] = nbonds
+        if atoms is not None:
+            if not isinstance(atoms, list) or not all(isinstance(a, int) for a in atoms):
+                raise ValueError("atoms must be a list of integers")
+            target['atoms'] = atoms
+
+        return target
 
     def _parse_atom_line(self, line):
         """
@@ -289,6 +354,17 @@ class MolBlockV3K:
                 atom.update(kwargs)
                 break
 
+    def add_virtual_atom(self, x, y, z, extra=None):
+        """
+        Add a virtual atom (element='*') to the molblock.
+        Returns the index of the new virtual atom.
+
+        Example:
+            v_idx = molblock_obj.add_virtual_atom(1.0, 2.0, 0.0)
+        """
+        return self.add_atom("*", x, y, z, extra)
+    
+    
     def add_bond(self, type_, atom1, atom2, endpts=None, attach=None, extra=None):
         """
         Add a new bond to the molblock.
@@ -326,16 +402,6 @@ class MolBlockV3K:
         self.renumber_bonds()
         return idx
 
-    def add_virtual_atom(self, x, y, z, extra=None):
-        """
-        Add a virtual atom (element='*') to the molblock.
-        Returns the index of the new virtual atom.
-
-        Example:
-            v_idx = molblock_obj.add_virtual_atom(1.0, 2.0, 0.0)
-        """
-        return self.add_atom("*", x, y, z, extra)
-
     def remove_bond(self, idx):
         """
         Remove a bond by its index.
@@ -346,17 +412,95 @@ class MolBlockV3K:
         self.bonds = [b for b in self.bonds if b['idx'] != idx]
         self.renumber_bonds()
 
-    def modify_bond(self, idx, **kwargs):
+    def modify_bond(self, idx, type=None, atom1=None, atom2=None, endpts=None, attach=None, extra=None):
         """
         Modify properties of a bond by its index.
-
-        Example:
-            molblock_obj.modify_bond(b_idx, type=2)
+        Only non-None arguments will be updated with minimal type validation.
+        Supported fields: type(int), atom1(int), atom2(int), endpts(list[int]), attach(str), extra(str).
         """
-        for bond in self.bonds:
-            if bond['idx'] == idx:
-                bond.update(kwargs)
+        # find target bond
+        target = None
+        for b in self.bonds:
+            if b.get('idx') == idx:
+                target = b
                 break
+        if target is None:
+            return None
+
+        # minimal validation & updates
+        if type is not None:
+            if not isinstance(type, int):
+                try:
+                    type = int(type)
+                except Exception:
+                    raise ValueError("type must be an integer")
+            target['type'] = type
+
+        if atom1 is not None:
+            if not isinstance(atom1, int):
+                try:
+                    atom1 = int(atom1)
+                except Exception:
+                    raise ValueError("atom1 must be an integer")
+            target['atom1'] = atom1
+
+        if atom2 is not None:
+            if not isinstance(atom2, int):
+                try:
+                    atom2 = int(atom2)
+                except Exception:
+                    raise ValueError("atom2 must be an integer")
+            target['atom2'] = atom2
+
+        if endpts is not None:
+            if not isinstance(endpts, list) or not all(isinstance(e, int) for e in endpts):
+                # allow coercion to list[int] where possible
+                try:
+                    if not isinstance(endpts, list):
+                        endpts = list(endpts)
+                    endpts = [int(e) for e in endpts]
+                except Exception:
+                    raise ValueError("endpts must be a list of integers (including the first count element)")
+            target['endpts'] = endpts
+
+        # If attach is provided, ensure we have endpts either already present or provided now
+        if attach is not None:
+            if not isinstance(attach, str):
+                attach = str(attach)
+            if endpts is None and 'endpts' not in target:
+                raise ValueError("ATTACH provided but ENDPTS is missing for this bond")
+            target['attach'] = attach
+
+        if extra is not None:
+            if not isinstance(extra, str):
+                extra = str(extra)
+            target['extra'] = extra
+
+        return target
+
+    def get_bond_indices(self):
+        """
+        Return a list of all bond indices (the 'idx' field from each bond).
+        Example: [1, 2, 3, ...]
+        """
+        return [b.get('idx') for b in self.bonds]
+
+    def get_bond_by_idx(self, idx):
+        """
+        Return the bond entry (dict) matching the internal bond 'idx'.
+        Args:
+            idx (int): bond index to look up
+        Returns:
+            dict | None: the bond dict if found, else None
+        """
+        try:
+            target = int(idx)
+        except Exception:
+            return None
+        for b in self.bonds:
+            if isinstance(b, dict) and b.get('idx') == target:
+                return b
+        return None
 
     def get_molblock(self):
         """
