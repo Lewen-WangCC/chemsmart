@@ -342,17 +342,75 @@ class MolBlockV3K:
         self.bonds = [b for b in self.bonds if b['atom1'] != idx and b['atom2'] != idx]
         self.renumber_all()
 
-    def modify_atom(self, idx, **kwargs):
+    def modify_atom(self, idx, element=None, x=None, y=None, z=None, extra=None):
         """
         Modify properties of an atom by its index.
-
-        Example:
-            molblock_obj.modify_atom(idx, x=1.0, y=2.0)
+        Only non-None arguments will be updated with minimal type validation.
+        Supported fields:
+          - element (str)
+          - x, y, z (float)
+          - extra (list[str])
+        Returns the updated atom dict, or None if not found.
         """
-        for atom in self.atoms:
-            if atom['idx'] == idx:
-                atom.update(kwargs)
+        # find target atom
+        target = None
+        for a in self.atoms:
+            if a.get('idx') == idx:
+                target = a
                 break
+        if target is None:
+            return None
+
+        if element is not None:
+            target['element'] = str(element)
+
+        if x is not None:
+            try:
+                target['x'] = float(x)
+            except Exception:
+                raise ValueError("x must be a float")
+        if y is not None:
+            try:
+                target['y'] = float(y)
+            except Exception:
+                raise ValueError("y must be a float")
+        if z is not None:
+            try:
+                target['z'] = float(z)
+            except Exception:
+                raise ValueError("z must be a float")
+
+        if extra is not None:
+            if not isinstance(extra, list):
+                raise ValueError("extra must be a list (e.g., list of tokens/flags)")
+            # keep as-is; caller controls the content (e.g., strings)
+            target['extra'] = extra
+
+        return target
+
+    def get_atom_indices(self):
+        """
+        Return a list of all atom indices (the 'idx' field from each atom).
+        Example: [1, 2, 3, ...]
+        """
+        return [a.get('idx') for a in self.atoms]
+
+    def get_atom_by_idx(self, idx):
+        """
+        Return the atom entry (dict) matching the internal atom 'idx'.
+        Args:
+            idx (int): atom index to look up
+        Returns:
+            dict | None: the atom dict if found, else None
+        """
+        try:
+            target = int(idx)
+        except Exception:
+            return None
+        for a in self.atoms:
+            if isinstance(a, dict) and a.get('idx') == target:
+                return a
+        return None
 
     def add_virtual_atom(self, x, y, z, extra=None):
         """
@@ -562,6 +620,13 @@ class MolBlockV3K:
         Each item is a dict with atom information.
         """
         return [atom for atom in self.atoms if atom.get('element') == '*']
+
+    def get_virtual_atom_indices(self):
+        """
+        Return a list of indices (idx) for all virtual atoms (element == '*').
+        Example: [7, 12]
+        """
+        return [atom.get('idx') for atom in self.atoms if atom.get('element') == '*']
 
     def renew_count(self, nsg=None, n3d=None, chiral=None, regno=None):
         """
