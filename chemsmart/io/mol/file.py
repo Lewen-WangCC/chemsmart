@@ -1,11 +1,11 @@
 from functools import cached_property
 
-from chemsmart.io.mol.v3000 import MolBlockV3K
+from chemsmart.io.mol.v3k import MolBlockV3K
 from chemsmart.utils.mixins import FileMixin
 from chemsmart.utils.utils import string2index_1based
 
 
-class MolV3000File(FileMixin):
+class MolV3KFile(FileMixin):
     def __init__(self, filename):
         self.filename = filename
         # self.molblock = None

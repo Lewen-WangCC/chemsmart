@@ -12,7 +12,7 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors, rdMolEnumerator, rdFMCS, rdDepictor
 
 from chemsmart.io.molecules.structure import Molecule
-from chemsmart.io.mol.v3000 import MolBlockV3K
+from chemsmart.io.mol.v3k import MolBlockV3K
 from chemsmart.jobs.runner import JobRunner
 from chemsmart.settings.executable import GaussianExecutable
 from chemsmart.utils.periodictable import PeriodicTable
@@ -171,6 +171,40 @@ class IterateJobRunner(JobRunner):
             linknode_specs=linknode_specs,
         ).get_molblock()
 
+        print("=="*20)
+        print(type(self.molblock_v3k))
+        print(self.molblock_v3k)
+        self.rdkit_mol = Chem.MolFromMolBlock(self.molblock_v3k, sanitize=False, removeHs=False, strictParsing=False)
+        print("=="*20)
+        # print(type(self.rdkit_mol))
+        # print(dir(self.rdkit_mol))
+        print(f"GetNumAtoms: {self.rdkit_mol.GetNumAtoms()}")
+        print(f"GetNumBonds: {self.rdkit_mol.GetNumBonds()}")
+        print("=="*20)
+        
+        print("Atoms:")
+        for atom in self.rdkit_mol.GetAtoms():
+            print(
+                f"Idx={atom.GetIdx()}, "
+                f"Symbol={atom.GetSymbol()}, "
+                f"Degree={atom.GetDegree()}, "
+                f"Charge={atom.GetFormalCharge()}"
+            )
+
+        print("\nBonds:")
+        for bond in self.rdkit_mol.GetBonds():
+            if bond.HasProp("_MolFileBondEndPts"):
+                print(f"bond {bond.GetIdx()} ENDPTS:", bond.GetProp("_MolFileBondEndPts"))
+            if bond.HasProp("_MolFileBondAttach"):
+                print(f"bond {bond.GetIdx()} ATTACH:", bond.GetProp("_MolFileBondAttach"))
+        print("**"*20)
+        print(dir(self.rdkit_mol.GetBonds()[0]))
+
+        print("=="*20)
+        print("PropsAsDict:")
+        print(self.rdkit_mol.GetPropsAsDict(includePrivate=True, includeComputed=True))
+        exit()
+
         logger.info(f"Successfully converted molecule to RDKit format")
 
     def _get_command(self, job):
@@ -209,11 +243,6 @@ class IterateJobRunner(JobRunner):
         logger.info("Iteration logic will be implemented here")
         logger.info(f"Modifications applied: {has_modifications}")
 
-        # Create output file containing MOLBlock information
-        # print("=="*10)
-        # print(type(self.molblock_v3k))
-        # print(self.molblock_v3k)
-        # exit()
         bundle = self.iterate_from_molblock_v3k(Chem.MolFromMolBlock(self.molblock_v3k))
         self.align_bundle_coords(bundle)
 
@@ -384,7 +413,7 @@ class IterateJobRunner(JobRunner):
                     bond_atom1 = int(parts[2])
                     bond_atom2 = virtual_idx
                     comma_parts = parts[3].split(",")
-                    endpts = " ".join(comma_parts[1:])  # skip the first number
+                    endpts = " ".join(comma_parts)
                     extra_info = f"ENDPTS=({endpts}) ATTACH={parts[4]}"
 
                     # Check for bond overlap (ignore order)
@@ -412,7 +441,7 @@ class IterateJobRunner(JobRunner):
                     group_first_atom = int(parts[1])
                     comma_parts = parts[2].split(",")
                     count = int(comma_parts[0])
-                    endpts = [int(x) for x in comma_parts[1:]]
+                    endpts = [int(x) for x in comma_parts]
                     attach_type = parts[3]
 
                     # Find all atoms (neighbors) connected to group_first_atom
@@ -482,14 +511,35 @@ class IterateJobRunner(JobRunner):
 
     @staticmethod
     def align_bundle_coords(bndl):
-        ps = rdFMCS.MCSParameters()
+        # ps = rdFMCS.MCSParameters()
+        # for m in bndl:
+        #     Chem.SanitizeMol(m)
+        # mcs = rdFMCS.FindMCS(bndl,completeRingsOnly=True)
+        # q = Chem.MolFromSmarts(mcs.smartsString)
+        # rdDepictor.Compute2DCoords(q)
+        # for m in bndl:
+        #     rdDepictor.GenerateDepictionMatching2DStructure(m,q)
+        
+        # Try to create 2D coords without strict sanitization to avoid valence errors
+        try:
+            mcs = rdFMCS.FindMCS(bndl, completeRingsOnly=True)
+            q = Chem.MolFromSmarts(mcs.smartsString)
+            rdDepictor.Compute2DCoords(q)
+        except Exception:
+            q = None
+
         for m in bndl:
-            Chem.SanitizeMol(m)
-        mcs = rdFMCS.FindMCS(bndl,completeRingsOnly=True)
-        q = Chem.MolFromSmarts(mcs.smartsString)
-        rdDepictor.Compute2DCoords(q)
-        for m in bndl:
-            rdDepictor.GenerateDepictionMatching2DStructure(m,q)
+            # Avoid full sanitize: some enumerated structures can violate valence temporarily
+            try:
+                rdDepictor.Compute2DCoords(m)
+            except Exception:
+                pass
+            if q is not None:
+                try:
+                    rdDepictor.GenerateDepictionMatching2DStructure(m, q)
+                except Exception:
+                    # Fallback: leave the molecule with its own 2D coords
+                    pass
     
     @staticmethod
     def iterate_from_molblock_v3k(molblock_v3k_obj):

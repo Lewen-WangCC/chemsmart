@@ -61,7 +61,7 @@ def click_iterate_jobtype_options(f):
         type=str,
         multiple=True,
         default=None,
-        help="LINKNODE specification: 'node_id:atom_num:definition_of_link' (e.g., '1:4:2,1,2,1,5')",
+        help="LINKNODE specification: 'minrep:maxrep:nbonds,inatom1,outatom1,inatom2,outatom2,...' (e.g., 1:2:2,20,19,20,21)",
     )
     @click.option(
         "--position-variation",
@@ -70,8 +70,8 @@ def click_iterate_jobtype_options(f):
         default=None,
         help=(
             "Position Variation specification:"
-            "\n  1. 'bond_type:group_first_atom:endpt_count,endpt1,endpt2,...:attach_type' (e.g., '1:8:3,1,5,6:ANY')"
-            "\n  2. 'bond_type:virtual_atom:group_first_atom:endpt_count,endpt1,endpt2,...:attach_type' (e.g., '1:7:8:3,1,5,6:ANY')"
+            "\n  1. 'bond_type:group_first_atom:endpt_count,endpt1,endpt2,...:attach_type' (e.g., 1:8:3,1,5,6:ANY)"
+            "\n  2. 'bond_type:virtual_atom:group_first_atom:endpt_count,endpt1,endpt2,...:attach_type' (e.g., 1:7:8:3,1,5,6:ANY)"
         ),
     )
     @functools.wraps(f)
