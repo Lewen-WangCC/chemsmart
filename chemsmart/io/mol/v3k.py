@@ -34,6 +34,7 @@ class MolBlockV3K:
         self.footer = []  # Footer information (e.g., END CTAB, M END)
         self._parse_molblock(molblock_str)
 
+    # --- Input interfaces ---
     def _parse_molblock(self, molblock_str):
         """
         Parse the V3000 molblock string and separate header, atom, bond, linknode, and footer sections.
@@ -112,118 +113,6 @@ class MolBlockV3K:
             return {'idx': idx, 'minrep': minrep, 'maxrep': maxrep, 'nbonds': nbonds, 'atoms': atoms}
         except Exception:
             return None
-
-    def get_linknodes_list(self):
-        """
-        Return a shallow copy of the list of all LINKNODE entries (structured dicts).
-        """
-        return self.linknodes.copy()
-
-    def get_linknode_count(self):
-        """
-        Return the number of LINKNODE entries currently stored.
-        This is equivalent to the number of linknode entries parsed or added.
-        """
-        return len(self.linknodes)
-
-    def get_linknode_by_idx(self, idx):
-        """
-        Return the LINKNODE entry (structured dict) matching the internal idx.
-        Args:
-            idx (int): internal 'idx' of the LINKNODE
-        Returns:
-            dict | None: the LINKNODE dict if found, else None
-        """
-        try:
-            target = int(idx)
-        except Exception:
-            return None
-        for ln in self.linknodes:
-            if isinstance(ln, dict) and ln.get('idx') == target:
-                return ln
-        return None
-
-    def add_linknode(self, minrep, maxrep, nbonds, atoms):
-        """
-        Add a LINKNODE entry using structured parameters, consistent with self.linknodes storage.
-        Args:
-            minrep (int): minimal repetitions
-            maxrep (int): maximal repetitions
-            nbonds (int): number of bond pairs defined
-            atoms (Sequence[int]): flat list of atom indices [in1, out1, in2, out2, ...]
-        Returns:
-            dict: the structured LINKNODE dict added (with auto 'idx').
-        """
-        m = int(minrep)
-        M = int(maxrep)
-        n = int(nbonds)
-        # strict validation for atoms
-        if not isinstance(atoms, list):
-            raise ValueError("atoms must be provided as a list of integers")
-        atoms = [int(v) for v in atoms]
-
-        ln = {
-            'idx': len(self.linknodes) + 1,
-            'minrep': m,
-            'maxrep': M,
-            'nbonds': n,
-            'atoms': atoms,
-        }
-        self.linknodes.append(ln)
-        return ln
-
-    def remove_linknode(self, idx):
-        """
-        Remove a LINKNODE entry by its internal idx field.
-        Args:
-            idx: internal 'idx' field of the LINKNODE to remove.
-        """
-        found = False
-        for i, ln in enumerate(self.linknodes):
-            if ln.get('idx') == idx:
-                del self.linknodes[i]
-                found = True
-                break
-        if found:
-            # Resequence idx fields
-            for j, ln in enumerate(self.linknodes, start=1):
-                ln['idx'] = j
-
-    def modify_linknode(self, idx, minrep=None, maxrep=None, nbonds=None, atoms=None):
-        """
-        Modify properties of a LINKNODE entry by its internal idx.
-        Only non-None arguments will be updated.
-        Args:
-            idx (int): internal 'idx' of the LINKNODE to modify
-            minrep (int|None): new minrep if provided
-            maxrep (int|None): new maxrep if provided
-            nbonds (int|None): new nbonds if provided
-            atoms (list[int]|None): new atoms list if provided
-        Returns:
-            dict | None: the updated LINKNODE dict, or None if not found
-        """
-        target = self.get_linknode_by_idx(idx)
-        if not target:
-            return None
-
-        if minrep is not None:
-            if not isinstance(minrep, int):
-                raise ValueError("minrep must be an integer")
-            target['minrep'] = minrep
-        if maxrep is not None:
-            if not isinstance(maxrep, int):
-                raise ValueError("maxrep must be an integer")
-            target['maxrep'] = maxrep
-        if nbonds is not None:
-            if not isinstance(nbonds, int):
-                raise ValueError("nbonds must be an integer")
-            target['nbonds'] = nbonds
-        if atoms is not None:
-            if not isinstance(atoms, list) or not all(isinstance(a, int) for a in atoms):
-                raise ValueError("atoms must be a list of integers")
-            target['atoms'] = atoms
-
-        return target
 
     def _parse_atom_line(self, line):
         """
@@ -328,7 +217,7 @@ class MolBlockV3K:
             'extra': extra or []
         }
         self.atoms.append(atom)
-        self.renumber_atoms()
+        self.renumber_all()
         return idx
 
     def remove_atom(self, idx):
@@ -421,7 +310,38 @@ class MolBlockV3K:
             v_idx = molblock_obj.add_virtual_atom(1.0, 2.0, 0.0)
         """
         return self.add_atom("*", x, y, z, extra)
-    
+
+    def get_first_atom(self):
+        """
+        Return the information of the first atom in the molblock.
+        Returns None if no atom exists.
+        """
+        if self.atoms:
+            return self.atoms[0]
+        return None
+
+    def get_last_atom(self):
+        """
+        Return the information of the last atom in the molblock.
+        Returns None if no atom exists.
+        """
+        if self.atoms:
+            return self.atoms[-1]
+        return None
+
+    def get_virtual_atoms(self):
+        """
+        Return a list of all virtual atoms (element == '*') in the molblock.
+        Each item is a dict with atom information.
+        """
+        return [atom for atom in self.atoms if atom.get('element') == '*']
+
+    def get_virtual_atom_indices(self):
+        """
+        Return a list of indices (idx) for all virtual atoms (element == '*').
+        Example: [7, 12]
+        """
+        return [atom.get('idx') for atom in self.atoms if atom.get('element') == '*']
     
     def add_bond(self, type_, atom1, atom2, endpts=None, attach=None, extra=None):
         """
@@ -560,73 +480,117 @@ class MolBlockV3K:
                 return b
         return None
 
-    def get_molblock(self):
+    def add_linknode(self, minrep, maxrep, nbonds, atoms):
         """
-        Output the current molblock string with all atoms, bonds, and linknodes.
-        Renders LINKNODE lines from the structured dict (excludes internal idx).
+        Add a LINKNODE entry using structured parameters, consistent with self.linknodes storage.
+        Args:
+            minrep (int): minimal repetitions
+            maxrep (int): maximal repetitions
+            nbonds (int): number of bond pairs defined
+            atoms (Sequence[int]): flat list of atom indices [in1, out1, in2, out2, ...]
+        Returns:
+            dict: the structured LINKNODE dict added (with auto 'idx').
         """
-        lines = []
-        lines.extend(self.header)
-        # Add COUNTS line from self.count
-        self.renew_count()  # Ensure counts are up to date
-        counts_line = f"M  V30 COUNTS {self.count['na']} {self.count['nb']} {self.count['nsg']} {self.count['n3d']} {self.count['chiral']}"
-        if self.count.get('regno'):
-            counts_line += f" REGNO={self.count['regno']}"
-        lines.append(counts_line)
-        lines.append('M  V30 BEGIN ATOM')
-        for atom in self.atoms:
-            atom_line = f"M  V30 {atom['idx']} {atom['element']} {atom['x']} {atom['y']} {atom['z']}"
-            if atom['extra']:
-                atom_line += ' ' + ' '.join(str(e) for e in atom['extra'])
-            lines.append(atom_line)
-        lines.append('M  V30 END ATOM')
-        lines.append('M  V30 BEGIN BOND')
-        for bond in self.bonds:
-            bond_line = f"M  V30 {bond['idx']} {bond['type']} {bond['atom1']} {bond['atom2']}"
-            if bond['extra']:
-                bond_line += f" {bond['extra']}"
-            lines.append(bond_line)
-        lines.append('M  V30 END BOND')
+        m = int(minrep)
+        M = int(maxrep)
+        n = int(nbonds)
+        # strict validation for atoms
+        if not isinstance(atoms, list):
+            raise ValueError("atoms must be provided as a list of integers")
+        atoms = [int(v) for v in atoms]
+
+        ln = {
+            'idx': len(self.linknodes) + 1,
+            'minrep': m,
+            'maxrep': M,
+            'nbonds': n,
+            'atoms': atoms,
+        }
+        self.linknodes.append(ln)
+        return ln
+
+    def remove_linknode(self, idx):
+        """
+        Remove a LINKNODE entry by its internal idx field.
+        Args:
+            idx: internal 'idx' field of the LINKNODE to remove.
+        """
+        found = False
+        for i, ln in enumerate(self.linknodes):
+            if ln.get('idx') == idx:
+                del self.linknodes[i]
+                found = True
+                break
+        if found:
+            # Resequence idx fields
+            for j, ln in enumerate(self.linknodes, start=1):
+                ln['idx'] = j
+
+    def modify_linknode(self, idx, minrep=None, maxrep=None, nbonds=None, atoms=None):
+        """
+        Modify properties of a LINKNODE entry by its internal idx.
+        Only non-None arguments will be updated.
+        Args:
+            idx (int): internal 'idx' of the LINKNODE to modify
+            minrep (int|None): new minrep if provided
+            maxrep (int|None): new maxrep if provided
+            nbonds (int|None): new nbonds if provided
+            atoms (list[int]|None): new atoms list if provided
+        Returns:
+            dict | None: the updated LINKNODE dict, or None if not found
+        """
+        target = self.get_linknode_by_idx(idx)
+        if not target:
+            return None
+
+        if minrep is not None:
+            if not isinstance(minrep, int):
+                raise ValueError("minrep must be an integer")
+            target['minrep'] = minrep
+        if maxrep is not None:
+            if not isinstance(maxrep, int):
+                raise ValueError("maxrep must be an integer")
+            target['maxrep'] = maxrep
+        if nbonds is not None:
+            if not isinstance(nbonds, int):
+                raise ValueError("nbonds must be an integer")
+            target['nbonds'] = nbonds
+        if atoms is not None:
+            if not isinstance(atoms, list) or not all(isinstance(a, int) for a in atoms):
+                raise ValueError("atoms must be a list of integers")
+            target['atoms'] = atoms
+
+        return target
+
+    def get_linknodes_list(self):
+        """
+        Return a shallow copy of the list of all LINKNODE entries (structured dicts).
+        """
+        return self.linknodes.copy()
+
+    def get_linknode_count(self):
+        """
+        Return the number of LINKNODE entries currently stored.
+        This is equivalent to the number of linknode entries parsed or added.
+        """
+        return len(self.linknodes)
+
+    def get_linknode_by_idx(self, idx):
+        """
+        Return the LINKNODE entry (structured dict) matching the internal idx.
+        Args:
+            idx (int): internal 'idx' of the LINKNODE
+        Returns:
+            dict | None: the LINKNODE dict if found, else None
+        """
+        try:
+            target = int(idx)
+        except Exception:
+            return None
         for ln in self.linknodes:
-            # Render as: M  V30 LINKNODE {minrep} {maxrep} {nbonds} {atoms...}
-            if isinstance(ln, dict) and 'minrep' in ln and 'maxrep' in ln and 'nbonds' in ln and 'atoms' in ln:
-                line = f"M  V30 LINKNODE {ln['minrep']} {ln['maxrep']} {ln['nbonds']} " + ' '.join(str(a) for a in ln['atoms'])
-                lines.append(line)
-            # else: skip malformed
-        lines.extend(self.footer)
-        return '\n'.join(lines)
-
-    def get_first_atom(self):
-        """
-        Return the information of the first atom in the molblock.
-        Returns None if no atom exists.
-        """
-        if self.atoms:
-            return self.atoms[0]
+            if isinstance(ln, dict) and ln.get('idx') == target:
+                return ln
         return None
-
-    def get_last_atom(self):
-        """
-        Return the information of the last atom in the molblock.
-        Returns None if no atom exists.
-        """
-        if self.atoms:
-            return self.atoms[-1]
-        return None
-
-    def get_virtual_atoms(self):
-        """
-        Return a list of all virtual atoms (element == '*') in the molblock.
-        Each item is a dict with atom information.
-        """
-        return [atom for atom in self.atoms if atom.get('element') == '*']
-
-    def get_virtual_atom_indices(self):
-        """
-        Return a list of indices (idx) for all virtual atoms (element == '*').
-        Example: [7, 12]
-        """
-        return [atom.get('idx') for atom in self.atoms if atom.get('element') == '*']
 
     def renew_count(self, nsg=None, n3d=None, chiral=None, regno=None):
         """
@@ -665,24 +629,56 @@ class MolBlockV3K:
     def renumber_atoms(self, start: int = 1):
         """
         Renumber all atoms sequentially starting from `start`.
-        Updates each atom's 'idx'.
-        Also updates any bond references (atom1/atom2) and linknode atoms.
+        Updates each atom's 'idx', and also remaps any references to the old
+        indices inside bonds (atom1/atom2 and ENDPTS) and LINKNODE atoms.
         """
-        # Build mapping from old index to new index
-        mapping = {atom['idx']: i for i, atom in enumerate(self.atoms, start=start)}
-        # Update atoms
+        # Build mapping from old index -> new index **before** mutating atoms
+        old_order = [atom['idx'] for atom in self.atoms]
+        mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(old_order, start=start)}
+
+        # Update atoms themselves
         for atom in self.atoms:
-            atom['idx'] = mapping[atom['idx']]
-        # Update bonds
-        for bond in self.bonds:
-            if bond['atom1'] in mapping:
-                bond['atom1'] = mapping[bond['atom1']]
-            if bond['atom2'] in mapping:
-                bond['atom2'] = mapping[bond['atom2']]
-        # Update linknodes: remap indices inside each linknode's atoms list
-        for ln in self.linknodes:
-            if isinstance(ln, dict) and 'atoms' in ln:
-                ln['atoms'] = [mapping.get(a, a) for a in ln['atoms']]
+            old_idx = atom['idx']
+            atom['idx'] = mapping.get(old_idx, old_idx)
+
+        # Update bonds using helpers; also remap ENDPTS if present
+        for bidx in self.get_bond_indices():
+            b = self.get_bond_by_idx(bidx)
+            if not b:
+                continue
+            new_a1 = mapping.get(b.get('atom1'), b.get('atom1'))
+            new_a2 = mapping.get(b.get('atom2'), b.get('atom2'))
+
+            kwargs = {}
+            if new_a1 != b.get('atom1'):
+                kwargs['atom1'] = new_a1
+            if new_a2 != b.get('atom2'):
+                kwargs['atom2'] = new_a2
+
+            # Remap ENDPTS list (keep first element as the count, map the rest)
+            if isinstance(b.get('endpts'), list) and b['endpts']:
+                ep = b['endpts']
+                if isinstance(ep[0], int):
+                    new_ep = [ep[0]] + [mapping.get(v, v) for v in ep[1:]]
+                else:
+                    # Fallback: map all entries if first is not count-int
+                    new_ep = [mapping.get(v, v) for v in ep]
+                # Only set if changed
+                if new_ep != ep:
+                    kwargs['endpts'] = new_ep
+
+            if kwargs:
+                self.modify_bond(bidx, **kwargs)
+
+        # Update LINKNODE atoms using helpers
+        ln_count = self.get_linknode_count()
+        for ln_idx in range(1, ln_count + 1):
+            ln = self.get_linknode_by_idx(ln_idx)
+            if not ln or 'atoms' not in ln or not isinstance(ln['atoms'], list):
+                continue
+            new_atoms = [mapping.get(a, a) for a in ln['atoms']]
+            if new_atoms != ln['atoms']:
+                self.modify_linknode(ln_idx, atoms=new_atoms)
 
     def renumber_all(self, atom_start: int = 1, bond_start: int = 1):
         """
@@ -691,3 +687,51 @@ class MolBlockV3K:
         """
         self.renumber_atoms(start=atom_start)
         self.renumber_bonds(start=bond_start)
+
+    # --- Output interfaces ---
+    def get_molblock(self):
+        """
+        Output the current molblock string with all atoms, bonds, and linknodes.
+        Renders LINKNODE lines from the structured dict (excludes internal idx).
+        """
+        lines = []
+        lines.extend(self.header)
+        # Add COUNTS line from self.count
+        self.renew_count()  # Ensure counts are up to date
+        counts_line = f"M  V30 COUNTS {self.count['na']} {self.count['nb']} {self.count['nsg']} {self.count['n3d']} {self.count['chiral']}"
+        if self.count.get('regno'):
+            counts_line += f" REGNO={self.count['regno']}"
+        lines.append(counts_line)
+        lines.append('M  V30 BEGIN ATOM')
+        for atom in self.atoms:
+            atom_line = f"M  V30 {atom['idx']} {atom['element']} {atom['x']} {atom['y']} {atom['z']}"
+            if atom['extra']:
+                atom_line += ' ' + ' '.join(str(e) for e in atom['extra'])
+            lines.append(atom_line)
+        lines.append('M  V30 END ATOM')
+        lines.append('M  V30 BEGIN BOND')
+        for bond in self.bonds:
+            bond_line = f"M  V30 {bond['idx']} {bond['type']} {bond['atom1']} {bond['atom2']}"
+            opts = []
+            # Serialize ENDPTS if present (keep first element as count)
+            if 'endpts' in bond and isinstance(bond['endpts'], list) and bond['endpts']:
+                endpts_str = ' '.join(str(x) for x in bond['endpts'])
+                opts.append(f"ENDPTS=({endpts_str})")
+            # Serialize ATTACH if present
+            if 'attach' in bond and isinstance(bond['attach'], str) and bond['attach']:
+                opts.append(f"ATTACH={bond['attach']}")
+            # Serialize EXTRA if present (already a string)
+            if 'extra' in bond and bond['extra']:
+                opts.append(str(bond['extra']))
+            if opts:
+                bond_line += ' ' + ' '.join(opts)
+            lines.append(bond_line)
+        lines.append('M  V30 END BOND')
+        for ln in self.linknodes:
+            # Render as: M  V30 LINKNODE {minrep} {maxrep} {nbonds} {atoms...}
+            if isinstance(ln, dict) and 'minrep' in ln and 'maxrep' in ln and 'nbonds' in ln and 'atoms' in ln:
+                line = f"M  V30 LINKNODE {ln['minrep']} {ln['maxrep']} {ln['nbonds']} " + ' '.join(str(a) for a in ln['atoms'])
+                lines.append(line)
+            # else: skip malformed
+        lines.extend(self.footer)
+        return '\n'.join(lines)

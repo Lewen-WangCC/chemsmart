@@ -177,37 +177,7 @@ class IterateJobRunner(JobRunner):
         ).get_molblock()
 
         print("=="*20)
-        print(type(self.molblock_v3k))
         print(self.molblock_v3k)
-        self.rdkit_mol = Chem.MolFromMolBlock(self.molblock_v3k, sanitize=False, removeHs=False, strictParsing=False)
-        print("=="*20)
-        # print(type(self.rdkit_mol))
-        # print(dir(self.rdkit_mol))
-        print(f"GetNumAtoms: {self.rdkit_mol.GetNumAtoms()}")
-        print(f"GetNumBonds: {self.rdkit_mol.GetNumBonds()}")
-        print("=="*20)
-        
-        print("Atoms:")
-        for atom in self.rdkit_mol.GetAtoms():
-            print(
-                f"Idx={atom.GetIdx()}, "
-                f"Symbol={atom.GetSymbol()}, "
-                f"Degree={atom.GetDegree()}, "
-                f"Charge={atom.GetFormalCharge()}"
-            )
-
-        print("\nBonds:")
-        for bond in self.rdkit_mol.GetBonds():
-            if bond.HasProp("_MolFileBondEndPts"):
-                print(f"bond {bond.GetIdx()} ENDPTS:", bond.GetProp("_MolFileBondEndPts"))
-            if bond.HasProp("_MolFileBondAttach"):
-                print(f"bond {bond.GetIdx()} ATTACH:", bond.GetProp("_MolFileBondAttach"))
-        print("**"*20)
-        print(dir(self.rdkit_mol.GetBonds()[0]))
-
-        print("=="*20)
-        print("PropsAsDict:")
-        print(self.rdkit_mol.GetPropsAsDict(includePrivate=True, includeComputed=True))
         exit()
 
         logger.info(f"Successfully converted molecule to RDKit format")
@@ -464,26 +434,27 @@ class IterateJobRunner(JobRunner):
                     bond_type = int(parts[0])
                     bond_atom1 = int(parts[2])
                     bond_atom2 = virtual_idx
-                    comma_parts = parts[3].split(",")
-                    endpts = " ".join(comma_parts)
-                    extra_info = f"ENDPTS=({endpts}) ATTACH={parts[4]}"
+                    # Structured fields for ENDPTS and ATTACH
+                    endpts_list = [int(x) for x in parts[3].split(",")]
+                    attach_type = parts[4]
 
                     # Check for bond overlap (ignore order)
                     bond_found = False
                     for bond in molblock_v3k_obj.bonds:
                         atoms = {bond['atom1'], bond['atom2']}
                         if atoms == {bond_atom1, bond_atom2}:
-                            # Overlap found, append extra info
-                            bond['extra'] = extra_info
+                            # Overlap found, set fields directly
+                            molblock_v3k_obj.modify_bond(bond['idx'], endpts=endpts_list, attach=attach_type)
                             bond_found = True
                             break
                     if not bond_found:
-                        # No overlap, create new bond
+                        # No overlap, create new bond with structured fields
                         molblock_v3k_obj.add_bond(
                             type_=bond_type,
                             atom1=bond_atom1,
                             atom2=bond_atom2,
-                            extra=extra_info
+                            endpts=endpts_list,
+                            attach=attach_type
                         )
         if position_variation_format1:
             for pv in position_variation_format1:
@@ -547,16 +518,15 @@ class IterateJobRunner(JobRunner):
                         )
 
                     # 2) Create a new bond between group_first_atom and the virtual atom, and attach position variation info
-                    endpts_str = ' '.join(str(x) for x in endpts)
-                    extra_info = f"ENDPTS=({endpts_str}) ATTACH={attach_type}"
                     new_bond_idx = molblock_v3k_obj.add_bond(
                         type_=bond_type,
                         atom1=v_idx,
                         atom2=group_first_atom,
-                        extra=extra_info,
+                        endpts=endpts,
+                        attach=attach_type,
                     )
                     logger.debug(
-                        f"Added new bond {new_bond_idx} between {group_first_atom} and virtual atom {v_idx} with '{extra_info}' for spec '{pv}'"
+                        f"Added new bond {new_bond_idx} between {group_first_atom} and virtual atom {v_idx} with ENDPTS={endpts} ATTACH={attach_type} for spec '{pv}'"
                     )
 
         return molblock_v3k_obj
