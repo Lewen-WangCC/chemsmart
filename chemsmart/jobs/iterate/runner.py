@@ -109,7 +109,7 @@ class IterateJobRunner(JobRunner):
                 with open(self.job_inputfile, 'r') as f:
                     file_content = f.read()
                 if 'V3000' in file_content:
-                    self.molblock_v3k = file_content
+                    self.molblock_v3k_str = file_content
                     self.has_modifications = False
                     logger.info("Directly loaded MOL file content as V3K format")
                     return  # Directly return, skip further conversion
@@ -120,7 +120,7 @@ class IterateJobRunner(JobRunner):
         try:
             self.rdkit_mol = mol.to_rdkit(
                 add_bonds=True,
-                bond_cutoff_buffer=0.05,
+                bond_cutoff_buffer=0.06,
                 adjust_H=True
             )
                 
@@ -132,7 +132,7 @@ class IterateJobRunner(JobRunner):
         
         # Try to generate MOLBlock V3000 format
         try:
-            self.molblock_v3k = Chem.MolToV3KMolBlock(self.rdkit_mol)
+            self.molblock_v3k_str = Chem.MolToV3KMolBlock(self.rdkit_mol)
             logger.info("Successfully generated MOLBlock V3000")
         except Exception as e:
             error_msg = str(e).lower()
@@ -143,7 +143,7 @@ class IterateJobRunner(JobRunner):
                 logger.info("Detected aromatic bond issue, applying fix...")
                 # Fix aromatic bond marking issue
                 fixed_mol = self._fix_aromatic_bonds(self.rdkit_mol)
-                self.molblock_v3k = Chem.MolToV3KMolBlock(fixed_mol)
+                self.molblock_v3k_str = Chem.MolToV3KMolBlock(fixed_mol)
                 self.rdkit_mol = fixed_mol  
                 logger.info("Successfully fixed aromatic bonds and generated MOLBlock V3000")
             else:
@@ -168,17 +168,13 @@ class IterateJobRunner(JobRunner):
         self.position_variation_format2 = pv_format2
 
         # Create MolBlockV3K object for subsequent operations
-        molblock_v3k_obj = MolBlockV3K(self.molblock_v3k)
-        self.molblock_v3k = self._apply_change_to_molblock(
+        molblock_v3k_obj = MolBlockV3K(self.molblock_v3k_str)
+        self.molblock_v3k_str = self._apply_change_to_molblock(
             molblock_v3k_obj,
             position_variation_format1=pv_format1,
             position_variation_format2=pv_format2,
             linknode_specs=linknode_specs,
         ).get_molblock()
-
-        print("=="*20)
-        print(self.molblock_v3k)
-        exit()
 
         logger.info(f"Successfully converted molecule to RDKit format")
 
@@ -207,18 +203,21 @@ class IterateJobRunner(JobRunner):
         logger.info(f"Starting iteration for job: {job.label}")
 
         # Check if MOLBlock V3000 is available
-        if not hasattr(self, 'molblock_v3k') or not self.molblock_v3k:
+        if not hasattr(self, 'molblock_v3k_str') or not self.molblock_v3k_str:
             raise ValueError("MOLBlock V3000 not generated. Call _write_input() first.")
 
         # Check if there are modifications (LINKNODE or Position Variation)
         has_modifications = getattr(self, 'has_modifications', False)
 
         # The actual iteration logic will be implemented here
-        # Use self.molblock_v3k for iteration
+        # Use self.molblock_v3k_str for iteration
         logger.info("Iteration logic will be implemented here")
         logger.info(f"Modifications applied: {has_modifications}")
 
-        bundle = self.iterate_from_molblock_v3k(Chem.MolFromMolBlock(self.molblock_v3k))
+        print("=="*20)
+        print(self.molblock_v3k_str)
+        # exit()
+        bundle = self.iterate_from_molblock_v3k(Chem.MolFromMolBlock(self.molblock_v3k_str))
         self.align_bundle_coords(bundle)
 
         for index, mol in enumerate(bundle):
