@@ -1,6 +1,6 @@
 from functools import cached_property
 
-from chemsmart.io.mol.v3k import MolBlockV3K
+from chemsmart.io.molblockv3k.v3k import MolBlockV3K
 from chemsmart.utils.mixins import FileMixin
 from chemsmart.utils.utils import string2index_1based
 

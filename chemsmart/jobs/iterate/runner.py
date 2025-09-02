@@ -12,7 +12,7 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors, rdMolEnumerator, rdFMCS, rdDepictor
 
 from chemsmart.io.molecules.structure import Molecule
-from chemsmart.io.mol.v3k import MolBlockV3K
+from chemsmart.io.molblockv3k.v3k import MolBlockV3K
 from chemsmart.jobs.runner import JobRunner
 from chemsmart.settings.executable import GaussianExecutable
 from chemsmart.utils.periodictable import PeriodicTable
@@ -120,7 +120,7 @@ class IterateJobRunner(JobRunner):
         try:
             self.rdkit_mol = mol.to_rdkit(
                 add_bonds=True,
-                bond_cutoff_buffer=0.06,
+                bond_cutoff_buffer=0.05,
                 adjust_H=True
             )
                 
