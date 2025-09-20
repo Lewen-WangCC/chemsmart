@@ -854,7 +854,7 @@ class Molecule:
         # Convert RDKit molecule to SMILES
         return Chem.MolToSmiles(rdkit_mol)
 
-    def to_rdkit(self, add_bonds=True, bond_cutoff_buffer=0.05, adjust_H=True):
+    def to_rdkit(self, add_bonds=True, bond_cutoff_buffer=0.05, adjust_H=True, bond_detection="default"):
         """Convert Molecule object to RDKit Mol with proper stereochemistry handling.
         Args:
             add_bonds (bool): Flag to add bonds to molecule or not.
@@ -862,6 +862,8 @@ class Molecule:
             From testing, see test_resonance_handling, it seems that a value of 0.1Å
             works for ozone, acetone, benzene, and probably other molecules, too.
             adjust_Hs (bool): Adjust bond distances to H atoms.
+            bond_detection (str): Method for bond detection. Default is "default",
+                                options are "default", "vectorized", "rdkit".
         Returns:
             RDKit Mol: RDKit molecule object.
         """
@@ -875,9 +877,25 @@ class Molecule:
 
         # add bonds
         if add_bonds:
-            rdkit_mol = self._add_bonds_to_rdkit_mol(
-                rdkit_mol, bond_cutoff_buffer, adjust_H
-            )
+            if bond_detection == "default":
+                rdkit_mol = self._add_bonds_to_rdkit_mol(
+                    rdkit_mol, bond_cutoff_buffer, adjust_H
+                )
+            else:
+                try:
+                    if bond_detection == "vectorized":
+                        rdkit_mol = self._add_bonds_to_rdkit_mol_vectorized(
+                            rdkit_mol, bond_cutoff_buffer, adjust_H
+                        )
+                    elif bond_detection == "rdkit":
+                        # Use Rdkit's build-in method to add bonds
+                        rdkit_mol = self._add_bonds_using_rdkit_detection(rdkit_mol)
+                except Exception as e:
+                    logger.warning(f"Bond detection with method {bond_detection} failed: {e}")
+                    logger.warning("Falling back to default bond detection method.")
+                    rdkit_mol = self._add_bonds_to_rdkit_mol(
+                        rdkit_mol, bond_cutoff_buffer, adjust_H
+                    )
 
         # Create a conformer and set 3D coordinates
         conformer = rdchem.Conformer(len(self.symbols))
@@ -1001,6 +1019,70 @@ class Molecule:
                     rdkit_mol.AddBond(i, j, bond_type)
 
         return rdkit_mol
+
+    def _add_bonds_using_rdkit_detection(self, rdkit_mol, bond_cutoff_buffer=0.05, adjust_H=True):
+        """
+        Add bonds to RDKit molecule using intelligent bond detection with fallback strategy.
+        
+        This method implements a robust bond detection algorithm that first attempts to use
+        RDKit's pure chemical intelligence, then falls back to a hybrid approach if needed.
+        
+        Args:
+            rdkit_mol (RWMol): RDKit molecule object containing only atoms, no bonds
+            bond_cutoff_buffer (float, optional): Buffer for distance-based bond cutoff. Defaults to 0.05.
+            adjust_H (bool, optional): Whether to adjust hydrogen bond distance criteria. Defaults to True.
+            
+        Returns:
+            RWMol: RDKit molecule object with complete bond connectivity
+            
+        Raises:
+            RuntimeError: When all bond detection methods fail
+        """
+        try:
+            from rdkit.Chem import rdDetermineBonds
+            
+            # Method 1: Try RDKit's pure approach first (no initial bonds)
+            logger.info("Trying RDKit's pure bond detection approach")
+            mol_copy = Chem.RWMol(rdkit_mol)  # Empty molecule, no bonds
+            
+            # Add conformer for coordinate information
+            conformer = rdchem.Conformer(len(self.symbols))
+            for i, pos in enumerate(self.positions):
+                conformer.SetAtomPosition(i, Point3D(*pos))
+            mol_copy.AddConformer(conformer)
+            
+            charge = self.charge or 0
+            logger.debug(f"Using molecular charge: {charge}")
+            
+            # Try connectivity first, then bond orders
+            rdDetermineBonds.DetermineConnectivity(mol_copy)
+            rdDetermineBonds.DetermineBondOrders(mol_copy, charge=charge)
+            
+            logger.info("Successfully determined bonds using pure RDKit approach")
+            return mol_copy
+            
+        except Exception as e:
+            logger.warning(f"Pure RDKit approach failed: {e}. Trying hybrid approach.")
+
+            try:
+                # Method 2: Hybrid approach - start with distance bonds, then refine
+                logger.info("Trying hybrid approach: distance bonds + RDKit refinement")
+                
+                # Get distance-based bonds first
+                mol_with_bonds = self._add_bonds_to_rdkit_mol(
+                    rdkit_mol, bond_cutoff_buffer=bond_cutoff_buffer, adjust_H=adjust_H
+                )
+                
+                # Try to use RDKit to just optimize bond orders (not connectivity)
+                # This is more conservative than full DetermineBonds
+                rdDetermineBonds.DetermineBondOrders(mol_with_bonds, charge=self.charge or 0)
+                
+                logger.info("Successfully refined bond orders using hybrid approach")
+                return mol_with_bonds
+                
+            except Exception as e2:
+                logger.error(f"RDKit connectivity determination also failed: {e2}")
+                raise RuntimeError(f"Hybrid approach also failed: {e2}.") from e2
 
     @cached_property
     def rdkit_fingerprints(self):

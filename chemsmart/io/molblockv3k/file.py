@@ -2,7 +2,6 @@ from functools import cached_property
 
 from chemsmart.io.molblockv3k.v3k import MolBlockV3K
 from chemsmart.utils.mixins import FileMixin
-from chemsmart.utils.utils import string2index_1based
 
 
 class MolV3KFile(FileMixin):
@@ -19,20 +18,20 @@ class MolV3KFile(FileMixin):
     @cached_property
     def num_atoms(self):
         return int(self.contents[0])
-    
+
     @cached_property
     def molecule(self):
         return self.get_molecules(index="-1")
-    
+
     @cached_property
     def comments(self):
         return self.get_comments(index="-1")
 
     def read(self):
-        with open(self.filename, 'r') as f:
+        with open(self.filename, "r") as f:
             molblock_str = f.read()
             self.molblock = MolBlockV3K(molblock_str)
 
     def write(self):
-        with open(self.file_path, 'w') as f:
+        with open(self.file_path, "w") as f:
             f.write(self.molblock.raw)

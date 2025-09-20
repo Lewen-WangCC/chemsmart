@@ -4,10 +4,10 @@ from multiprocessing import set_start_method
 
 import click
 
+from chemsmart.cli.iterate import iterate
 from chemsmart.cli.jobrunner import click_jobrunner_options
 from chemsmart.cli.logger import logger_options
 from chemsmart.cli.subcommands import subcommands
-from chemsmart.cli.iterate import iterate
 from chemsmart.jobs.job import Job
 from chemsmart.jobs.runner import JobRunner
 from chemsmart.settings.server import Server

@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import Type
 
 from chemsmart.io.molecules.structure import Molecule
 from chemsmart.jobs.job import Job
@@ -15,14 +14,14 @@ class IterateJob(Job):
     TYPE = "iterate"
 
     def __init__(
-        self, 
-        molecule, 
-        label=None, 
+        self,
+        molecule,
+        label=None,
         output_dir=None,
         jobrunner=None,
-        linknode_specs=None, 
-        position_variation_specs=None, 
-        **kwargs
+        linknode_specs=None,
+        position_variation_specs=None,
+        **kwargs,
     ):
         super().__init__(
             molecule=molecule, label=label, jobrunner=jobrunner, **kwargs
@@ -32,21 +31,24 @@ class IterateJob(Job):
             raise ValueError(
                 f"Molecule must be instance of Molecule for {self}, but is {molecule} instead!"
             )
-        
+
         if output_dir:
             self.folder = output_dir
             self._output_dir = output_dir
         # 存储枚举相关参数
         self.linknode_specs = linknode_specs or []
         self.position_variation_specs = position_variation_specs or []
-        
-        logger.debug(f"IterateJob created with LINKNODE specs: {self.linknode_specs}")
-        logger.debug(f"IterateJob created with Position Variation specs: {self.position_variation_specs}")
+
+        logger.debug(
+            f"IterateJob created with LINKNODE specs: {self.linknode_specs}"
+        )
+        logger.debug(
+            f"IterateJob created with Position Variation specs: {self.position_variation_specs}"
+        )
 
         if label is None:
             label = molecule.get_chemical_formula(empirical=True)
         self.label = label
-
 
     @property
     def output_dir(self):
@@ -147,13 +149,13 @@ class IterateJob(Job):
 
     @classmethod
     def from_pubchem(
-        cls, 
-        identifier, 
-        label=None, 
+        cls,
+        identifier,
+        label=None,
         output_dir=None,
-        jobrunner=None, 
-        linknode_specs=None, 
-        position_variation_specs=None, 
+        jobrunner=None,
+        linknode_specs=None,
+        position_variation_specs=None,
         **kwargs,
     ):
         """Create an IterateJob from a PubChem identifier."""
@@ -184,4 +186,3 @@ class IterateJob(Job):
             position_variation_specs=position_variation_specs,
             **kwargs,
         )
-

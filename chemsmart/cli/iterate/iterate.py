@@ -1,9 +1,3 @@
-from rdkit import Chem
-from rdkit.Chem.Draw import rdDepictor
-from rdkit.Chem import Draw
-from rdkit.Chem import rdMolEnumerator
-import rdkit
-
 import functools
 import logging
 import os
@@ -13,12 +7,12 @@ import click
 from chemsmart.io.molecules.structure import Molecule
 from chemsmart.utils.cli import MyCommand
 
-
 logger = logging.getLogger(__name__)
 
 
 def click_iterate_settings_options(f):
     """Common click options for iteration settings."""
+
     @click.option(
         "-f",
         "--filename",
@@ -47,15 +41,16 @@ def click_iterate_settings_options(f):
         default=None,
         help="Output directory for iterated structures. If not specified, uses current working directory.",
     )
-    
     @functools.wraps(f)
     def wrapper_common_options(*args, **kwargs):
         return f(*args, **kwargs)
 
     return wrapper_common_options
 
+
 def click_iterate_jobtype_options(f):
     """Common click options for iteration job type."""
+
     @click.option(
         "--linknode",
         type=str,
@@ -102,7 +97,7 @@ def iterate(
     position_variation,
     pubchem,
     **kwargs,
-    ):
+):
 
     # obtain molecule structure
     if filename is None and pubchem is None:
@@ -144,7 +139,7 @@ def iterate(
         if filename:
             label = os.path.splitext(os.path.basename(filename))[0]
         elif pubchem:
-            label = pubchem.replace(' ', '_')
+            label = pubchem.replace(" ", "_")
         else:
             label = "iterate"
         label = f"{label}_iterate"
@@ -156,12 +151,12 @@ def iterate(
         output_dir = os.getcwd()  # use current working directory
     else:
         output_dir = os.path.abspath(output_dir)  # convert to absolute path
-    
+
     # create output directory if it doesn't exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         logger.info(f"Created output directory: {output_dir}")
-    
+
     logger.debug(f"Output directory: {output_dir}")
 
     # process multiple linknode and position_variation specifications
@@ -169,9 +164,11 @@ def iterate(
         logger.debug(f"LINKNODE specifications: {linknode}")
         for ln in linknode:
             logger.debug(f"Processing LINKNODE: {ln}")
-    
+
     if position_variation:
-        logger.debug(f"Position variation specifications: {position_variation}")
+        logger.debug(
+            f"Position variation specifications: {position_variation}"
+        )
         for pv in position_variation:
             logger.debug(f"Processing position variation: {pv}")
 
@@ -183,8 +180,10 @@ def iterate(
 
     # convert parameter format
     linknode_specs = list(linknode) if linknode else []
-    position_variation_specs = list(position_variation) if position_variation else []
-    
+    position_variation_specs = (
+        list(position_variation) if position_variation else []
+    )
+
     # create IterateJob
     from chemsmart.jobs.iterate.job import IterateJob
 
@@ -199,12 +198,14 @@ def iterate(
 
     logger.info(f"Created IterateJob: {iterate_job}")
     logger.debug(f"LINKNODE specs: {iterate_job.linknode_specs}")
-    logger.debug(f"Position Variation specs: {iterate_job.position_variation_specs}")
+    logger.debug(
+        f"Position Variation specs: {iterate_job.position_variation_specs}"
+    )
 
     # create JobRunner
     from chemsmart.jobs.runner import JobRunner
     from chemsmart.settings.server import Server
-    
+
     server = Server.current()
     jobrunner = JobRunner.from_job(
         job=iterate_job,

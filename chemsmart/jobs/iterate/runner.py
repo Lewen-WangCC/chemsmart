@@ -1,26 +1,13 @@
-import glob
 import logging
 import os
 import re
-import shlex
-import shutil
-import subprocess
-import sys
-from pathlib import Path
-from contextlib import suppress
-from rdkit import Chem
-from rdkit.Chem import rdMolDescriptors, rdMolEnumerator, rdFMCS, rdDepictor
 
-from chemsmart.io.molecules.structure import Molecule
+from rdkit import Chem
+from rdkit.Chem import rdDepictor, rdFMCS, rdMolEnumerator
+
 from chemsmart.io.molblockv3k.v3k import MolBlockV3K
 from chemsmart.jobs.runner import JobRunner
-from chemsmart.settings.executable import GaussianExecutable
 from chemsmart.utils.periodictable import PeriodicTable
-from chemsmart.utils.utils import (
-    get_prepend_string_list_from_modred_free_format,
-    quote_path,
-    run_command,
-)
 
 pt = PeriodicTable()
 
@@ -34,8 +21,10 @@ class IterateJobRunner(JobRunner):
     PROGRAM = "Iterate"
     FAKE = False
     SCRATCH = False
-    
-    def __init__(self, server, scratch=None, fake=False, scratch_dir=None, **kwargs):
+
+    def __init__(
+        self, server, scratch=None, fake=False, scratch_dir=None, **kwargs
+    ):
         # Use default SCRATCH if scratch is not explicitly set
         if scratch is None:
             scratch = self.SCRATCH  # default False
@@ -46,7 +35,7 @@ class IterateJobRunner(JobRunner):
                 "Scratch enabled for IterateJobRunner but no scratch_dir provided. "
                 "Iteration typically doesn't benefit from scratch usage."
             )
-        
+
         super().__init__(
             server=server,
             scratch=scratch,
@@ -82,54 +71,66 @@ class IterateJobRunner(JobRunner):
 
     def _write_input(self, job):
         """Prepare input for iteration - convert molecule to RDKit format and
-        modify the MOLBlock information according to linknode_specs and position_variation_specs."""
-        
+        modify the MOLBlock information according to linknode_specs and position_variation_specs.
+        """
+
         # obtain the molecule from the job
         mol = job.molecule
         if not mol:
             raise ValueError("No molecule provided for iteration job.")
 
         # obtain linknode and position_variation parameters
-        linknode_specs = getattr(job, 'linknode_specs', [])
+        linknode_specs = getattr(job, "linknode_specs", [])
         # Parse command-line LINKNODE specs into structured dicts used by MolBlockV3K.add_linknode
         if isinstance(linknode_specs, (list, tuple)):
             parsed_linknodes = self._parse_linknode_specs(linknode_specs)
             linknode_specs = parsed_linknodes
             self.linknode_specs = parsed_linknodes  # optionally for later use
-        position_variation_specs = getattr(job, 'position_variation_specs', [])
+        position_variation_specs = getattr(job, "position_variation_specs", [])
 
-        logger.info(f"Converting molecule to RDKit format for iteration job: {job.label}")
+        logger.info(
+            f"Converting molecule to RDKit format for iteration job: {job.label}"
+        )
         logger.debug(f"LINKNODE specs: {linknode_specs}")
         logger.debug(f"Position Variation specs: {position_variation_specs}")
-        
+
         # Check if file content is in V3000 format
-        if (not linknode_specs and not position_variation_specs and 
-            self.job_inputfile.lower().endswith('.mol')):
+        if (
+            not linknode_specs
+            and not position_variation_specs
+            and self.job_inputfile.lower().endswith(".mol")
+        ):
             try:
-                with open(self.job_inputfile, 'r') as f:
+                with open(self.job_inputfile, "r") as f:
                     file_content = f.read()
-                if 'V3000' in file_content:
+                if "V3000" in file_content:
                     self.molblock_v3k_str = file_content
                     self.has_modifications = False
-                    logger.info("Directly loaded MOL file content as V3K format")
+                    logger.info(
+                        "Directly loaded MOL file content as V3K format"
+                    )
                     return  # Directly return, skip further conversion
             except Exception as e:
-                logger.warning(f"Failed to directly read MOL file, falling back to normal conversion: {e}")
-        
+                logger.warning(
+                    f"Failed to directly read MOL file, falling back to normal conversion: {e}"
+                )
+
         # Convert to an RDKit Mol object using the to_rdkit() method of the Molecule object
         try:
             self.rdkit_mol = mol.to_rdkit(
-                add_bonds=True,
-                bond_cutoff_buffer=0.05,
-                adjust_H=True
+                add_bonds=True, bond_cutoff_buffer=0.05, adjust_H=True, bond_detection="rdkit"
             )
-                
+
         except Exception as e:
-            raise ValueError(f"Failed to convert molecule to RDKit format: {e}")
-        
+            raise ValueError(
+                f"Failed to convert molecule to RDKit format: {e}"
+            )
+
         if self.rdkit_mol is None:
-            raise ValueError("Molecule.to_rdkit() returned None. Check molecule validity.")
-        
+            raise ValueError(
+                "Molecule.to_rdkit() returned None. Check molecule validity."
+            )
+
         # Try to generate MOLBlock V3000 format
         try:
             self.molblock_v3k_str = Chem.MolToV3KMolBlock(self.rdkit_mol)
@@ -144,14 +145,18 @@ class IterateJobRunner(JobRunner):
                 # Fix aromatic bond marking issue
                 fixed_mol = self._fix_aromatic_bonds(self.rdkit_mol)
                 self.molblock_v3k_str = Chem.MolToV3KMolBlock(fixed_mol)
-                self.rdkit_mol = fixed_mol  
-                logger.info("Successfully fixed aromatic bonds and generated MOLBlock V3000")
+                self.rdkit_mol = fixed_mol
+                logger.info(
+                    "Successfully fixed aromatic bonds and generated MOLBlock V3000"
+                )
             else:
                 # Other errors are raised directly
                 raise ValueError(f"Failed to generate MOLBlock V3000: {e}")
 
         # Check if modification is needed
-        self.has_modifications = bool(linknode_specs or position_variation_specs)
+        self.has_modifications = bool(
+            linknode_specs or position_variation_specs
+        )
 
         # If no modification needed, directly return
         if not self.has_modifications:
@@ -159,8 +164,12 @@ class IterateJobRunner(JobRunner):
             return
 
         # Distinguish between the two formats of position_variation_specs
-        pv_format1 = self._split_position_variation_format1(position_variation_specs)
-        pv_format2 = self._split_position_variation_format2(position_variation_specs)
+        pv_format1 = self._split_position_variation_format1(
+            position_variation_specs
+        )
+        pv_format2 = self._split_position_variation_format2(
+            position_variation_specs
+        )
 
         self.linknode_specs = linknode_specs
         self.position_variation_specs = position_variation_specs
@@ -176,7 +185,7 @@ class IterateJobRunner(JobRunner):
             linknode_specs=linknode_specs,
         ).get_molblock()
 
-        logger.info(f"Successfully converted molecule to RDKit format")
+        logger.info("Successfully converted molecule to RDKit format")
 
     def _get_command(self, job):
         """Get command for execution - not needed for direct RDKit execution."""
@@ -195,7 +204,7 @@ class IterateJobRunner(JobRunner):
 
         # Directly execute iteration logic, not via external process
         self._execute_iteration(job, **kwargs)
-        
+
         self._postrun(job)
 
     def _execute_iteration(self, job, **kwargs):
@@ -203,46 +212,61 @@ class IterateJobRunner(JobRunner):
         logger.info(f"Starting iteration for job: {job.label}")
 
         # Check if MOLBlock V3000 is available
-        if not hasattr(self, 'molblock_v3k_str') or not self.molblock_v3k_str:
-            raise ValueError("MOLBlock V3000 not generated. Call _write_input() first.")
+        if not hasattr(self, "molblock_v3k_str") or not self.molblock_v3k_str:
+            raise ValueError(
+                "MOLBlock V3000 not generated. Call _write_input() first."
+            )
 
         # Check if there are modifications (LINKNODE or Position Variation)
-        has_modifications = getattr(self, 'has_modifications', False)
+        has_modifications = getattr(self, "has_modifications", False)
 
         # The actual iteration logic will be implemented here
         # Use self.molblock_v3k_str for iteration
         logger.info("Iteration logic will be implemented here")
         logger.info(f"Modifications applied: {has_modifications}")
 
-        print("=="*20)
+        print("==" * 20)
         print(self.molblock_v3k_str)
         # exit()
-        bundle = self.iterate_from_molblock_v3k(Chem.MolFromMolBlock(self.molblock_v3k_str))
+        bundle = self.iterate_from_molblock_v3k(
+            Chem.MolFromMolBlock(self.molblock_v3k_str)
+        )
         self.align_bundle_coords(bundle)
 
         for index, mol in enumerate(bundle):
             logger.info(f"Iterate molecule {index}: {mol}")
             m = Chem.Mol(mol)
-            xyz_path = os.path.join(job.folder, f"{job.label}_iterate_{index}.xyz")
+            xyz_path = os.path.join(
+                job.folder, f"{job.label}_iterate_{index}.xyz"
+            )
             try:
                 Chem.MolToXYZFile(m, xyz_path)
                 logger.info(f"Wrote iterated molecule {index} to {xyz_path}")
             except Exception as e:
-                logger.error(f"Failed to write iterated molecule {index} to XYZ file: {e}")
+                logger.error(
+                    f"Failed to write iterated molecule {index} to XYZ file: {e}"
+                )
 
     def _postrun(self, job):
         """Post-processing after iteration completion."""
         if self.scratch:
             # If scratch is used, copy result file to job directory
-            logger.info(f"Copying output from {self.running_directory} to {job.folder}")
+            logger.info(
+                f"Copying output from {self.running_directory} to {job.folder}"
+            )
 
             # Copy output file
             import shutil
-            target_outputfile = os.path.join(job.folder, os.path.basename(self.job_outputfile))
+
+            target_outputfile = os.path.join(
+                job.folder, os.path.basename(self.job_outputfile)
+            )
             shutil.copy2(self.job_outputfile, target_outputfile)
 
             # Clean up scratch directory
-            logger.info(f"Cleaning up scratch directory: {self.running_directory}")
+            logger.info(
+                f"Cleaning up scratch directory: {self.running_directory}"
+            )
             shutil.rmtree(self.running_directory)
 
         logger.info(f"Iteration job {job.label} completed")
@@ -260,8 +284,12 @@ class IterateJobRunner(JobRunner):
                     atom1 = bond.GetBeginAtom()
                     atom2 = bond.GetEndAtom()
                     # If not a C-C bond but marked as aromatic, mark for fixing
-                    if not (atom1.GetSymbol() == "C" and atom2.GetSymbol() == "C"):
-                        bonds_to_fix.append((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
+                    if not (
+                        atom1.GetSymbol() == "C" and atom2.GetSymbol() == "C"
+                    ):
+                        bonds_to_fix.append(
+                            (bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
+                        )
 
             # Since we can't modify bond types directly, use a workaround
             # Create a new molecule and rebuild bonds
@@ -286,10 +314,15 @@ class IterateJobRunner(JobRunner):
                 begin_idx = bond.GetBeginAtomIdx()
                 end_idx = bond.GetEndAtomIdx()
 
-                if (begin_idx, end_idx) in bonds_to_fix or (end_idx, begin_idx) in bonds_to_fix:
+                if (begin_idx, end_idx) in bonds_to_fix or (
+                    end_idx,
+                    begin_idx,
+                ) in bonds_to_fix:
                     # Change incorrect aromatic bond to single bond
                     new_mol.AddBond(begin_idx, end_idx, Chem.BondType.SINGLE)
-                    logger.debug(f"Fixed aromatic bond: {begin_idx}-{end_idx} -> SINGLE")
+                    logger.debug(
+                        f"Fixed aromatic bond: {begin_idx}-{end_idx} -> SINGLE"
+                    )
                 else:
                     # Keep original bond type
                     new_mol.AddBond(begin_idx, end_idx, bond.GetBondType())
@@ -297,13 +330,17 @@ class IterateJobRunner(JobRunner):
             # Update property cache
             new_mol.UpdatePropertyCache(strict=False)
 
-            logger.info(f"Fixed {len(bonds_to_fix)} incorrectly marked aromatic bonds")
+            logger.info(
+                f"Fixed {len(bonds_to_fix)} incorrectly marked aromatic bonds"
+            )
             return new_mol.GetMol()
 
         except Exception as e:
-            logger.warning(f"Failed to fix aromatic bonds: {e}, returning original molecule")
+            logger.warning(
+                f"Failed to fix aromatic bonds: {e}, returning original molecule"
+            )
             return rdkit_mol
-    
+
     def _split_position_variation_format1(self, position_variation_specs):
         """
         Extract position variation specs of format1: bond_type:first_atom:endpt_count,...:attach_type
@@ -319,12 +356,18 @@ class IterateJobRunner(JobRunner):
                 try:
                     count = int(comma_parts[0])
                 except Exception:
-                    raise ValueError(f"Invalid count in position variation format1: {pv}")
+                    raise ValueError(
+                        f"Invalid count in position variation format1: {pv}"
+                    )
                 digits = comma_parts[1:]
                 if len(digits) != count:
-                    raise ValueError(f"Count does not match number of digits in position variation format1: {pv}")
+                    raise ValueError(
+                        f"Count does not match number of digits in position variation format1: {pv}"
+                    )
                 if len(set(digits)) != len(digits):
-                    raise ValueError(f"Digits overlap in position variation format1: {pv}")
+                    raise ValueError(
+                        f"Digits overlap in position variation format1: {pv}"
+                    )
                 pv_format1.append(pv)
         return pv_format1
 
@@ -342,12 +385,18 @@ class IterateJobRunner(JobRunner):
                 try:
                     count = int(comma_parts[0])
                 except Exception:
-                    raise ValueError(f"Invalid count in position variation format2: {pv}")
+                    raise ValueError(
+                        f"Invalid count in position variation format2: {pv}"
+                    )
                 digits = comma_parts[1:]
                 if len(digits) != count:
-                    raise ValueError(f"Count does not match number of digits in position variation format2: {pv}")
+                    raise ValueError(
+                        f"Count does not match number of digits in position variation format2: {pv}"
+                    )
                 if len(set(digits)) != len(digits):
-                    raise ValueError(f"Digits overlap in position variation format2: {pv}")
+                    raise ValueError(
+                        f"Digits overlap in position variation format2: {pv}"
+                    )
                 pv_format2.append(pv)
         return pv_format2
 
@@ -390,15 +439,23 @@ class IterateJobRunner(JobRunner):
                 atoms = [int(x) for x in atom_tokens]
             except Exception:
                 continue
-            parsed.append({
-                "minrep": minrep,
-                "maxrep": maxrep,
-                "nbonds": nbonds,
-                "atoms": atoms,
-            })
+            parsed.append(
+                {
+                    "minrep": minrep,
+                    "maxrep": maxrep,
+                    "nbonds": nbonds,
+                    "atoms": atoms,
+                }
+            )
         return parsed
-    
-    def _apply_change_to_molblock(self, molblock_v3k_obj, position_variation_format1=None, position_variation_format2=None, linknode_specs=None):
+
+    def _apply_change_to_molblock(
+        self,
+        molblock_v3k_obj,
+        position_variation_format1=None,
+        position_variation_format2=None,
+        linknode_specs=None,
+    ):
         """
         Apply position variation information to the molblock object.
         This method will modify molblock_v3k_obj according to the command line position variation specs.
@@ -411,13 +468,15 @@ class IterateJobRunner(JobRunner):
         if linknode_specs:
             for ln in linknode_specs:
                 # ln is a structured dict: {'minrep','maxrep','nbonds','atoms'}
-                molblock_v3k_obj.add_linknode(ln['minrep'], ln['maxrep'], ln['nbonds'], ln['atoms'])
+                molblock_v3k_obj.add_linknode(
+                    ln["minrep"], ln["maxrep"], ln["nbonds"], ln["atoms"]
+                )
 
         if position_variation_format2:
             # For each position variation spec in format2, check if the specified virtual atom exists
             virtual_atoms = molblock_v3k_obj.get_virtual_atoms()
             # Build a set of virtual atom indices for fast lookup
-            virtual_atom_indices = set(atom['idx'] for atom in virtual_atoms)
+            virtual_atom_indices = set(atom["idx"] for atom in virtual_atoms)
             for pv in position_variation_format2:
                 parts = pv.split(":")
                 if len(parts) == 5:
@@ -425,9 +484,13 @@ class IterateJobRunner(JobRunner):
                     try:
                         virtual_idx = int(parts[1])
                     except Exception:
-                        raise ValueError(f"Invalid virtual atom index in position variation spec: {pv}")
+                        raise ValueError(
+                            f"Invalid virtual atom index in position variation spec: {pv}"
+                        )
                     if virtual_idx not in virtual_atom_indices:
-                        raise ValueError(f"Virtual atom index {virtual_idx} specified in position variation spec '{pv}' does not exist in molblock.")
+                        raise ValueError(
+                            f"Virtual atom index {virtual_idx} specified in position variation spec '{pv}' does not exist in molblock."
+                        )
 
                     # Parse bond info
                     bond_type = int(parts[0])
@@ -440,10 +503,14 @@ class IterateJobRunner(JobRunner):
                     # Check for bond overlap (ignore order)
                     bond_found = False
                     for bond in molblock_v3k_obj.bonds:
-                        atoms = {bond['atom1'], bond['atom2']}
+                        atoms = {bond["atom1"], bond["atom2"]}
                         if atoms == {bond_atom1, bond_atom2}:
                             # Overlap found, set fields directly
-                            molblock_v3k_obj.modify_bond(bond['idx'], endpts=endpts_list, attach=attach_type)
+                            molblock_v3k_obj.modify_bond(
+                                bond["idx"],
+                                endpts=endpts_list,
+                                attach=attach_type,
+                            )
                             bond_found = True
                             break
                     if not bond_found:
@@ -453,7 +520,7 @@ class IterateJobRunner(JobRunner):
                             atom1=bond_atom1,
                             atom2=bond_atom2,
                             endpts=endpts_list,
-                            attach=attach_type
+                            attach=attach_type,
                         )
         if position_variation_format1:
             for pv in position_variation_format1:
@@ -469,14 +536,16 @@ class IterateJobRunner(JobRunner):
                     # Find all atoms (neighbors) connected to group_first_atom
                     connected_atoms = set()
                     for bond in molblock_v3k_obj.bonds:
-                        if bond['atom1'] == group_first_atom:
-                            connected_atoms.add(bond['atom2'])
-                        elif bond['atom2'] == group_first_atom:
-                            connected_atoms.add(bond['atom1'])
+                        if bond["atom1"] == group_first_atom:
+                            connected_atoms.add(bond["atom2"])
+                        elif bond["atom2"] == group_first_atom:
+                            connected_atoms.add(bond["atom1"])
 
                     # Requirement: overlap between ENDPTS and group_first_atom's neighbors must be exactly 1
                     endpts_set = set(endpts)
-                    overlap = sorted(a for a in connected_atoms if a in endpts_set)
+                    overlap = sorted(
+                        a for a in connected_atoms if a in endpts_set
+                    )
                     # There must be exactly one atom in ENDPTS range connected to group_first_atom
                     if len(overlap) != 1:
                         raise ValueError(
@@ -487,7 +556,7 @@ class IterateJobRunner(JobRunner):
                     # Find atom information
                     src_atom = None
                     for a in molblock_v3k_obj.atoms:
-                        if a.get('idx') == neighbor_idx:
+                        if a.get("idx") == neighbor_idx:
                             src_atom = a
                             break
                     if src_atom is None:
@@ -495,8 +564,17 @@ class IterateJobRunner(JobRunner):
                             f"Internal error: cannot find atom {neighbor_idx} to clone as virtual atom for spec '{pv}'"
                         )
                     # Create a virtual atom with same coordinates/extra attributes (element symbol as '*', index assigned by editor)
-                    v_extra = list(src_atom.get('extra', [])) if isinstance(src_atom.get('extra'), list) else src_atom.get('extra')
-                    v_idx = molblock_v3k_obj.add_virtual_atom(src_atom['x'], src_atom['y'], src_atom['z'], extra=v_extra)
+                    v_extra = (
+                        list(src_atom.get("extra", []))
+                        if isinstance(src_atom.get("extra"), list)
+                        else src_atom.get("extra")
+                    )
+                    v_idx = molblock_v3k_obj.add_virtual_atom(
+                        src_atom["x"],
+                        src_atom["y"],
+                        src_atom["z"],
+                        extra=v_extra,
+                    )
                     logger.debug(
                         f"Created virtual atom {v_idx} cloned from atom {neighbor_idx} (ENDPTS {endpts}) for spec '{pv}'"
                     )
@@ -504,8 +582,11 @@ class IterateJobRunner(JobRunner):
                     # 1) Remove the original bond between group_first_atom and this neighbor
                     removed = False
                     for b in list(molblock_v3k_obj.bonds):
-                        if {b['atom1'], b['atom2']} == {group_first_atom, neighbor_idx}:
-                            molblock_v3k_obj.remove_bond(b['idx'])
+                        if {b["atom1"], b["atom2"]} == {
+                            group_first_atom,
+                            neighbor_idx,
+                        }:
+                            molblock_v3k_obj.remove_bond(b["idx"])
                             removed = True
                             logger.debug(
                                 f"Removed original bond {b['idx']} between {group_first_atom} and {neighbor_idx}"
@@ -540,7 +621,7 @@ class IterateJobRunner(JobRunner):
         # rdDepictor.Compute2DCoords(q)
         # for m in bndl:
         #     rdDepictor.GenerateDepictionMatching2DStructure(m,q)
-        
+
         # Try to create 2D coords without strict sanitization to avoid valence errors
         try:
             mcs = rdFMCS.FindMCS(bndl, completeRingsOnly=True)
@@ -561,7 +642,7 @@ class IterateJobRunner(JobRunner):
                 except Exception:
                     # Fallback: leave the molecule with its own 2D coords
                     pass
-    
+
     @staticmethod
     def iterate_from_molblock_v3k(molblock_v3k_obj):
         return rdMolEnumerator.Enumerate(molblock_v3k_obj)
