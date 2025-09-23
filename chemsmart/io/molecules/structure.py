@@ -1020,7 +1020,7 @@ class Molecule:
 
         return rdkit_mol
 
-    def _add_bonds_using_rdkit_detection(self, rdkit_mol, bond_cutoff_buffer=0.05, adjust_H=True):
+    def _add_bonds_using_rdkit_detection(self, rdkit_mol):
         """
         Add bonds to RDKit molecule using intelligent bond detection with fallback strategy.
         
@@ -1062,27 +1062,8 @@ class Molecule:
             return mol_copy
             
         except Exception as e:
-            logger.warning(f"Pure RDKit approach failed: {e}. Trying hybrid approach.")
-
-            try:
-                # Method 2: Hybrid approach - start with distance bonds, then refine
-                logger.info("Trying hybrid approach: distance bonds + RDKit refinement")
-                
-                # Get distance-based bonds first
-                mol_with_bonds = self._add_bonds_to_rdkit_mol(
-                    rdkit_mol, bond_cutoff_buffer=bond_cutoff_buffer, adjust_H=adjust_H
-                )
-                
-                # Try to use RDKit to just optimize bond orders (not connectivity)
-                # This is more conservative than full DetermineBonds
-                rdDetermineBonds.DetermineBondOrders(mol_with_bonds, charge=self.charge or 0)
-                
-                logger.info("Successfully refined bond orders using hybrid approach")
-                return mol_with_bonds
-                
-            except Exception as e2:
-                logger.error(f"RDKit connectivity determination also failed: {e2}")
-                raise RuntimeError(f"Hybrid approach also failed: {e2}.") from e2
+            logger.error(f"RDKit bond detection failed: {e}")
+            raise RuntimeError(f"RDKit bond detection failed: {e}") from e
 
     @cached_property
     def rdkit_fingerprints(self):

@@ -118,7 +118,7 @@ class IterateJobRunner(JobRunner):
         # Convert to an RDKit Mol object using the to_rdkit() method of the Molecule object
         try:
             self.rdkit_mol = mol.to_rdkit(
-                add_bonds=True, bond_cutoff_buffer=0.05, adjust_H=True, bond_detection="rdkit"
+                add_bonds=True, bond_detection="rdkit"
             )
 
         except Exception as e:
@@ -229,7 +229,7 @@ class IterateJobRunner(JobRunner):
         print(self.molblock_v3k_str)
         # exit()
         bundle = self.iterate_from_molblock_v3k(
-            Chem.MolFromMolBlock(self.molblock_v3k_str)
+            Chem.MolFromMolBlock(self.molblock_v3k_str, removeHs=False)
         )
         self.align_bundle_coords(bundle)
 
