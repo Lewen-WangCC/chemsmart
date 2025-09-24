@@ -753,7 +753,7 @@ class MolBlockV3K:
         self.renumber_bonds(start=bond_start)
 
     @staticmethod
-    def remove_hydrogens(mol_v3k):
+    def remove_hydrogens_to_carbon(mol_v3k):
         """
         Remove all hydrogen atoms that are bonded to carbon atoms from a MolBlockV3K object.
         
@@ -943,6 +943,282 @@ class MolBlockV3K:
         new_molblock.renew_count()
         
         return new_molblock
+
+    @staticmethod
+    def remove_hydrogens_rdkit(mol_v3k):
+        """
+        Remove hydrogen atoms using RDKit's RemoveHs method for more accurate chemical handling.
+        
+        This method:
+        1. Converts MolBlockV3K to RDKit Mol object
+        2. Uses RDKit's RemoveHs() to remove hydrogens with proper chemical rules
+        3. Converts back to MolBlockV3K with updated coordinates
+        
+        Args:
+            mol_v3k (MolBlockV3K): The MolBlockV3K object to process
+            
+        Returns:
+            MolBlockV3K: A new MolBlockV3K object with hydrogens removed using RDKit
+            
+        Raises:
+            ImportError: If RDKit is not available
+            ValueError: If molecule conversion fails
+        """
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+        except ImportError:
+            raise ImportError("RDKit is required for this method. Install with: pip install rdkit")
+        
+        try:
+            # Convert MolBlockV3K to RDKit Mol object using our fallback method
+            rdkit_mol = MolBlockV3K._create_rdkit_mol_from_v3k(mol_v3k)
+            
+            if rdkit_mol is None:
+                raise ValueError("Failed to convert MolBlockV3K to RDKit molecule")
+            
+            # Remove hydrogens using RDKit
+            mol_without_h = Chem.RemoveHs(rdkit_mol, 
+                                        implicitOnly=False, 
+                                        updateExplicitCount=True, 
+                                        sanitize=True)
+            
+            if mol_without_h is None:
+                raise ValueError("RDKit failed to remove hydrogens")
+            
+            # Convert back to V3K format manually instead of using molblock
+            return MolBlockV3K._create_v3k_from_rdkit_mol(mol_without_h)
+            
+        except Exception as e:
+            raise ValueError(f"Failed to process molecule with RDKit: {str(e)}")
+
+    @staticmethod
+    def add_hydrogens_rdkit(mol_v3k, add_coords=True, optimize_geometry=True):
+        """
+        Add hydrogen atoms using RDKit's AddHs method with proper 3D geometry.
+        
+        This method:
+        1. Converts MolBlockV3K to RDKit Mol object
+        2. Uses RDKit's AddHs() to add hydrogens with proper chemical rules
+        3. Generates/optimizes 3D coordinates for realistic molecular geometry
+        4. Converts back to MolBlockV3K
+        
+        Args:
+            mol_v3k (MolBlockV3K): The MolBlockV3K object to process
+            add_coords (bool): Whether to generate 3D coordinates for new hydrogens
+            optimize_geometry (bool): Whether to optimize the geometry using force field
+            
+        Returns:
+            MolBlockV3K: A new MolBlockV3K object with hydrogens added using RDKit
+            
+        Raises:
+            ImportError: If RDKit is not available
+            ValueError: If molecule conversion or processing fails
+        """
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem, rdDistGeom
+        except ImportError:
+            raise ImportError("RDKit is required for this method. Install with: pip install rdkit")
+        
+        try:
+            # Convert MolBlockV3K to RDKit Mol object using our fallback method
+            rdkit_mol = MolBlockV3K._create_rdkit_mol_from_v3k(mol_v3k)
+            
+            if rdkit_mol is None:
+                raise ValueError("Failed to convert MolBlockV3K to RDKit molecule")
+            
+            # Add hydrogens using RDKit
+            mol_with_h = Chem.AddHs(rdkit_mol, 
+                                  explicitOnly=False, 
+                                  addCoords=add_coords)
+            
+            if mol_with_h is None:
+                raise ValueError("RDKit failed to add hydrogens")
+            
+            # Generate or optimize 3D coordinates if requested
+            if add_coords:
+                try:
+                    # Try to embed 3D coordinates
+                    embed_result = AllChem.EmbedMolecule(mol_with_h, randomSeed=42)
+                    
+                    if embed_result == -1:
+                        # If embedding fails, try distance geometry
+                        rdDistGeom.EmbedMolecule(mol_with_h)
+                    
+                    # Optimize geometry using force field if requested
+                    if optimize_geometry:
+                        try:
+                            # Try MMFF94 first
+                            AllChem.MMFFOptimizeMolecule(mol_with_h, maxIters=500)
+                        except:
+                            try:
+                                # Fallback to UFF
+                                AllChem.UFFOptimizeMolecule(mol_with_h, maxIters=500)
+                            except:
+                                pass  # Continue without optimization if both fail
+                                
+                except Exception as coord_error:
+                    print(f"Warning: 3D coordinate generation failed: {coord_error}")
+                    # Continue with the molecule even if 3D generation fails
+            
+            # Convert back to V3K format manually instead of using molblock
+            return MolBlockV3K._create_v3k_from_rdkit_mol(mol_with_h)
+            
+        except Exception as e:
+            raise ValueError(f"Failed to process molecule with RDKit: {str(e)}")
+
+    @staticmethod
+    def _create_rdkit_mol_from_v3k(mol_v3k):
+        """
+        Helper method to manually create RDKit molecule from MolBlockV3K data.
+        Used as fallback when direct molblock parsing fails.
+        
+        Args:
+            mol_v3k (MolBlockV3K): The MolBlockV3K object to convert
+            
+        Returns:
+            rdkit.Chem.Mol: RDKit molecule object or None if conversion fails
+        """
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import rdchem
+        except ImportError:
+            return None
+        
+        try:
+            # Create empty editable molecule
+            emol = Chem.EditableMol(Chem.Mol())
+            
+            # Add atoms
+            atom_idx_map = {}  # Map from V3K idx to RDKit idx
+            for i, atom in enumerate(mol_v3k.atoms):
+                rd_atom = Chem.Atom(atom["element"])
+                rd_idx = emol.AddAtom(rd_atom)
+                atom_idx_map[atom["idx"]] = rd_idx
+            
+            # Add bonds
+            for bond in mol_v3k.bonds:
+                atom1_rd_idx = atom_idx_map.get(bond["atom1"])
+                atom2_rd_idx = atom_idx_map.get(bond["atom2"])
+                
+                if atom1_rd_idx is not None and atom2_rd_idx is not None:
+                    # Convert bond type
+                    bond_type = rdchem.BondType.SINGLE
+                    if bond["type"] == 2:
+                        bond_type = rdchem.BondType.DOUBLE
+                    elif bond["type"] == 3:
+                        bond_type = rdchem.BondType.TRIPLE
+                    elif bond["type"] == 4:
+                        bond_type = rdchem.BondType.AROMATIC
+                    
+                    emol.AddBond(atom1_rd_idx, atom2_rd_idx, bond_type)
+            
+            # Get the molecule
+            mol = emol.GetMol()
+            
+            # Add coordinates if available
+            if mol is not None and mol_v3k.atoms:
+                conf = Chem.Conformer(mol.GetNumAtoms())
+                for atom in mol_v3k.atoms:
+                    rd_idx = atom_idx_map.get(atom["idx"])
+                    if rd_idx is not None:
+                        conf.SetAtomPosition(rd_idx, (atom["x"], atom["y"], atom["z"]))
+                mol.AddConformer(conf)
+            
+            # Try to sanitize the molecule
+            try:
+                Chem.SanitizeMol(mol)
+            except:
+                pass  # Continue even if sanitization fails
+            
+            return mol
+            
+        except Exception:
+            return None
+
+    @staticmethod
+    def _create_v3k_from_rdkit_mol(rdkit_mol):
+        """
+        Helper method to create MolBlockV3K from RDKit molecule.
+        
+        Args:
+            rdkit_mol (rdkit.Chem.Mol): RDKit molecule object
+            
+        Returns:
+            MolBlockV3K: New MolBlockV3K object
+        """
+        try:
+            from rdkit import Chem
+        except ImportError:
+            raise ImportError("RDKit is required for this conversion")
+        
+        if rdkit_mol is None:
+            raise ValueError("Cannot convert None molecule")
+        
+        # Create V3K molblock content
+        lines = []
+        
+        # Header (minimal)
+        lines.append("")  # Empty line for header
+        
+        # Atoms and bonds count
+        num_atoms = rdkit_mol.GetNumAtoms()
+        num_bonds = rdkit_mol.GetNumBonds()
+        
+        lines.append(f"M  V30 COUNTS {num_atoms} {num_bonds} 0 0 0")
+        
+        # Atoms section
+        lines.append("M  V30 BEGIN ATOM")
+        
+        # Get conformer for coordinates
+        conf = None
+        if rdkit_mol.GetNumConformers() > 0:
+            conf = rdkit_mol.GetConformer()
+        
+        for i, atom in enumerate(rdkit_mol.GetAtoms(), 1):
+            element = atom.GetSymbol()
+            
+            # Get coordinates
+            if conf is not None:
+                pos = conf.GetAtomPosition(atom.GetIdx())
+                x, y, z = pos.x, pos.y, pos.z
+            else:
+                x, y, z = 0.0, 0.0, 0.0
+            
+            lines.append(f"M  V30 {i} {element} {x:.4f} {y:.4f} {z:.4f} 0")
+        
+        lines.append("M  V30 END ATOM")
+        
+        # Bonds section
+        lines.append("M  V30 BEGIN BOND")
+        
+        for i, bond in enumerate(rdkit_mol.GetBonds(), 1):
+            bond_type = 1  # Default to single
+            rd_type = bond.GetBondType()
+            
+            if rd_type == Chem.BondType.SINGLE:
+                bond_type = 1
+            elif rd_type == Chem.BondType.DOUBLE:
+                bond_type = 2
+            elif rd_type == Chem.BondType.TRIPLE:
+                bond_type = 3
+            elif rd_type == Chem.BondType.AROMATIC:
+                bond_type = 4
+            
+            atom1_idx = bond.GetBeginAtomIdx() + 1  # Convert to 1-based
+            atom2_idx = bond.GetEndAtomIdx() + 1    # Convert to 1-based
+            
+            lines.append(f"M  V30 {i} {bond_type} {atom1_idx} {atom2_idx}")
+        
+        lines.append("M  V30 END BOND")
+        
+        # Footer
+        lines.append("M  END")
+        
+        # Create MolBlockV3K object
+        molblock_str = "\n".join(lines)
+        return MolBlockV3K(molblock_str)
 
     # --- Output interfaces ---
     def get_molblock(self):
