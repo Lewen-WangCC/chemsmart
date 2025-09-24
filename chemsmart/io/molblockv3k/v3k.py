@@ -824,6 +824,126 @@ class MolBlockV3K:
         
         return new_molblock
 
+    @staticmethod
+    def add_hydrogens_to_carbon(mol_v3k):
+        """
+        Add hydrogen atoms to carbon atoms that have available valence positions.
+        
+        This method:
+        1. Identifies carbon atoms and counts their current bonds
+        2. Determines how many hydrogens can be added based on valence (C typically has 4 bonds)
+        3. Adds hydrogen atoms at appropriate positions around each carbon
+        4. Creates bonds between carbon and new hydrogen atoms
+        5. Updates atom and bond indices
+        6. Updates count information
+        
+        Args:
+            mol_v3k (MolBlockV3K): The MolBlockV3K object to process
+            
+        Returns:
+            MolBlockV3K: A new MolBlockV3K object with hydrogens added to carbons
+        """
+        # Create a deep copy of the original molblock to avoid modifying the input
+        new_molblock = MolBlockV3K(mol_v3k.get_molblock())
+        
+        # Step 1: Analyze each carbon atom and count its current bonds
+        carbon_atoms = []  # List of carbon atom info with bond counts
+        
+        for atom in new_molblock.atoms:
+            if atom["element"] == "C":
+                # Count bonds for this carbon atom
+                bond_count = 0
+                total_bond_order = 0
+                
+                for bond in new_molblock.bonds:
+                    if bond["atom1"] == atom["idx"] or bond["atom2"] == atom["idx"]:
+                        bond_count += 1
+                        total_bond_order += bond.get("type", 1)  # Default to single bond
+                
+                # Carbon typically has 4 valence electrons, so can form 4 bonds
+                # Consider bond order: single=1, double=2, triple=3
+                available_positions = 4 - total_bond_order
+                
+                if available_positions > 0:
+                    carbon_atoms.append({
+                        "atom": atom,
+                        "available_positions": available_positions,
+                        "current_bonds": bond_count
+                    })
+        
+        # Step 2: Add hydrogen atoms for each carbon with available positions
+        hydrogens_to_add = []  # List of hydrogen positions to add
+        bonds_to_add = []      # List of bonds to create
+        
+        for carbon_info in carbon_atoms:
+            carbon_atom = carbon_info["atom"]
+            available_positions = carbon_info["available_positions"]
+            
+            # Calculate positions for new hydrogens around the carbon
+            # Use simple geometric displacement from carbon position
+            base_distance = 1.1  # Typical C-H bond length in Angstroms
+            
+            for i in range(available_positions):
+                # Simple positioning: place hydrogens at different angles around carbon
+                angle = (2 * 3.14159 * i) / available_positions  # Distribute evenly
+                offset_x = base_distance * (0.8 + 0.4 * (i % 2))  # Slight variation
+                offset_y = base_distance * (0.6 * (1 if i % 2 == 0 else -1))
+                offset_z = base_distance * (0.3 * (1 if i < available_positions/2 else -1))
+                
+                # Apply rotation based on angle for better distribution
+                import math
+                x_pos = carbon_atom["x"] + offset_x * math.cos(angle) - offset_y * math.sin(angle)
+                y_pos = carbon_atom["y"] + offset_x * math.sin(angle) + offset_y * math.cos(angle)
+                z_pos = carbon_atom["z"] + offset_z
+                
+                # Create hydrogen atom entry
+                h_atom = {
+                    "element": "H",
+                    "x": x_pos,
+                    "y": y_pos,
+                    "z": z_pos,
+                    "extra": []
+                }
+                
+                hydrogens_to_add.append({
+                    "h_atom": h_atom,
+                    "carbon_idx": carbon_atom["idx"]
+                })
+        
+        # Step 3: Add hydrogen atoms to the molecule
+        for h_info in hydrogens_to_add:
+            # Add hydrogen atom
+            new_idx = len(new_molblock.atoms) + 1
+            h_atom = h_info["h_atom"]
+            h_atom["idx"] = new_idx
+            new_molblock.atoms.append(h_atom)
+            
+            # Prepare bond to carbon
+            bonds_to_add.append({
+                "type": 1,  # Single bond
+                "atom1": h_info["carbon_idx"],
+                "atom2": new_idx
+            })
+        
+        # Step 4: Add bonds between carbons and hydrogens
+        for bond_info in bonds_to_add:
+            new_bond_idx = len(new_molblock.bonds) + 1
+            new_bond = {
+                "idx": new_bond_idx,
+                "type": bond_info["type"],
+                "atom1": bond_info["atom1"],
+                "atom2": bond_info["atom2"]
+            }
+            new_molblock.bonds.append(new_bond)
+        
+        # Step 5: Renumber all atoms and bonds to ensure proper indexing
+        new_molblock.renumber_all()
+        
+        # Step 6: Update count information
+        new_molblock.renew_count()
+        
+        return new_molblock
+
     # --- Output interfaces ---
     def get_molblock(self):
         """
