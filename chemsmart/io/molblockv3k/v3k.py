@@ -752,6 +752,78 @@ class MolBlockV3K:
         self.renumber_atoms(start=atom_start)
         self.renumber_bonds(start=bond_start)
 
+    @staticmethod
+    def remove_hydrogens(mol_v3k):
+        """
+        Remove all hydrogen atoms that are bonded to carbon atoms from a MolBlockV3K object.
+        
+        This method:
+        1. Identifies hydrogen atoms connected to carbon atoms based on bond information
+        2. Records the indices of qualifying H atoms and their bonds
+        3. Removes bonds containing the qualifying H atoms
+        4. Updates all bond indices after removal
+        5. Removes the qualifying H atoms
+        6. Updates atom indices and remaps bond/linknode references
+        7. Updates count information
+        
+        Args:
+            mol_v3k (MolBlockV3K): The MolBlockV3K object to process
+            
+        Returns:
+            MolBlockV3K: A new MolBlockV3K object with hydrogens on carbon removed
+        """
+        # Create a deep copy of the original molblock to avoid modifying the input
+        new_molblock = MolBlockV3K(mol_v3k.get_molblock())
+        
+        # Step 1: Identify hydrogen atoms connected to carbon atoms
+        h_atoms_on_carbon = []  # List of H atom indices
+        bonds_to_remove = []    # List of bond indices to remove
+        
+        for bond in new_molblock.bonds:
+            atom1_idx = bond["atom1"]
+            atom2_idx = bond["atom2"]
+            
+            # Get atom objects
+            atom1 = new_molblock.get_atom_by_idx(atom1_idx)
+            atom2 = new_molblock.get_atom_by_idx(atom2_idx)
+            
+            if not atom1 or not atom2:
+                continue
+                
+            # Check if one is H and the other is C
+            if atom1["element"] == "H" and atom2["element"] == "C":
+                h_atoms_on_carbon.append(atom1_idx)
+                bonds_to_remove.append(bond["idx"])
+            elif atom1["element"] == "C" and atom2["element"] == "H":
+                h_atoms_on_carbon.append(atom2_idx)
+                bonds_to_remove.append(bond["idx"])
+        
+        # Remove duplicates while preserving order
+        h_atoms_on_carbon = list(dict.fromkeys(h_atoms_on_carbon))
+        bonds_to_remove = list(dict.fromkeys(bonds_to_remove))
+        
+        # Step 2: Remove bonds containing qualifying H atoms
+        # Remove in reverse order to maintain correct indices during removal
+        for bond_idx in sorted(bonds_to_remove, reverse=True):
+            new_molblock.bonds = [b for b in new_molblock.bonds if b["idx"] != bond_idx]
+        
+        # Step 3: Update bond indices after removal
+        new_molblock.renumber_bonds()
+        
+        # Step 4: Remove qualifying H atoms
+        # Remove in reverse order by index to maintain correct indices
+        for h_atom_idx in sorted(h_atoms_on_carbon, reverse=True):
+            new_molblock.atoms = [a for a in new_molblock.atoms if a["idx"] != h_atom_idx]
+        
+        # Step 5: Update atom indices and remap references
+        # This will automatically update bond and linknode references
+        new_molblock.renumber_atoms()
+        
+        # Step 6: Update count information
+        new_molblock.renew_count()
+        
+        return new_molblock
+
     # --- Output interfaces ---
     def get_molblock(self):
         """
