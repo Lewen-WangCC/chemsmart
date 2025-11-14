@@ -184,7 +184,12 @@ class IterateJobRunner(JobRunner):
             position_variation_format2=pv_format2,
             linknode_specs=linknode_specs,
         ).get_molblock()
-
+        print("==" * 20)
+        print(self.molblock_v3k_str)
+        self.molblock_v3k_str = MolBlockV3K.remove_hydrogens_rdkit(MolBlockV3K(self.molblock_v3k_str)).get_molblock()
+        print("==" * 20)
+        print(self.molblock_v3k_str)
+        exit()
         logger.info("Successfully converted molecule to RDKit format")
 
     def _get_command(self, job):
