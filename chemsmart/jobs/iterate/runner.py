@@ -4,7 +4,8 @@ import os
 import queue
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from itertools import product
 from typing import TYPE_CHECKING, Optional
 
 from chemsmart.io.molecules.structure import Molecule
@@ -132,6 +133,203 @@ def _run_combination_worker(
     """
     try:
         result_pair = _run_combination_task(combination)
+        result_queue.put(result_pair)
+    except Exception as e:
+        logger.error(f"Worker process panic for {combination.label}: {e}")
+        result_queue.put((combination.label, None))
+
+
+@dataclass
+class MultiSiteAssignment:
+    """One slot's resolved assignment in a multi-site combination."""
+
+    substituent: Molecule
+    substituent_label: str
+    substituent_link_index: int  # 1-based
+    skeleton_link_index: int  # 1-based, on original skeleton
+
+
+@dataclass
+class MultiSiteCombination:
+    """A full multi-site combination: one skeleton with multiple slot assignments."""
+
+    skeleton: Molecule
+    skeleton_label: str
+    skeleton_indices: Optional[list[int]]  # 1-based, or None
+    assignments: list[MultiSiteAssignment] = field(default_factory=list)
+    method: str = "lagrange_multipliers"
+    sphere_direction_samples_num: int = 96
+    axial_rotations_sample_num: int = 6
+
+    @property
+    def label(self) -> str:
+        parts = [self.skeleton_label]
+        for a in sorted(self.assignments, key=lambda x: x.skeleton_link_index):
+            parts.append(f"{a.skeleton_link_index}{a.substituent_label}")
+        return "_".join(parts)
+
+
+def _batch_preprocess_skeleton(
+    skeleton: Molecule,
+    link_indices: list[int],
+    skeleton_indices: Optional[list[int]],
+) -> tuple[Molecule, dict[int, int]]:
+    """
+    Remove old substituent groups at multiple link positions in one pass.
+
+    Parameters
+    ----------
+    skeleton : Molecule
+        Original skeleton molecule
+    link_indices : list[int]
+        All 1-based link indices to preprocess
+    skeleton_indices : list[int] or None
+        1-based skeleton atom indices (for SkeletonPreprocessor)
+
+    Returns
+    -------
+    tuple[Molecule, dict[int, int]]
+        (processed skeleton, mapping from original 1-based index to new 1-based index)
+    """
+    import numpy as np
+
+    all_remove_indices = set()  # 0-based
+
+    for link_idx in link_indices:
+        prep = SkeletonPreprocessor(skeleton, link_idx, skeleton_indices)
+        if not prep._has_available_bonding_position():
+            removed = prep.detect_substituent()  # 0-based indices
+            all_remove_indices.update(removed)
+
+    keep_indices = sorted(set(range(len(skeleton))) - all_remove_indices)
+
+    if not keep_indices:
+        raise ValueError("All skeleton atoms would be removed during preprocessing.")
+
+    # Verify all link atoms are kept
+    for link_idx in link_indices:
+        if (link_idx - 1) not in keep_indices:
+            raise ValueError(
+                f"Link atom at index {link_idx} (1-based) was removed during "
+                f"batch preprocessing."
+            )
+
+    # Build processed skeleton
+    symbols = [skeleton.chemical_symbols[i] for i in keep_indices]
+    positions = skeleton.positions[keep_indices]
+    frozen = None
+    if skeleton.frozen_atoms is not None:
+        frozen = [skeleton.frozen_atoms[i] for i in keep_indices]
+
+    processed = Molecule(
+        symbols=symbols,
+        positions=positions,
+        charge=skeleton.charge,
+        multiplicity=skeleton.multiplicity,
+        frozen_atoms=frozen,
+    )
+
+    # Build index map: original 1-based -> new 1-based
+    index_map = {}
+    for new_0, orig_0 in enumerate(keep_indices):
+        index_map[orig_0 + 1] = new_0 + 1
+
+    return processed, index_map
+
+
+def _run_multi_site_combination_task(
+    combination: MultiSiteCombination,
+) -> tuple[str, Optional[Molecule]]:
+    """
+    Execute a multi-site combination: batch-preprocess skeleton,
+    then sequentially insert substituents.
+
+    Parameters
+    ----------
+    combination : MultiSiteCombination
+        The multi-site combination to process
+
+    Returns
+    -------
+    tuple[str, Molecule | None]
+        (label, result_molecule) or (label, None) if failed
+    """
+    label = combination.label
+
+    try:
+        # Collect all link indices used in this combination
+        all_link_indices = [a.skeleton_link_index for a in combination.assignments]
+
+        # Step 1: Batch preprocess — remove old groups at all link positions
+        processed_skeleton, index_map = _batch_preprocess_skeleton(
+            combination.skeleton,
+            all_link_indices,
+            combination.skeleton_indices,
+        )
+
+        # Step 2: Sequential insertion
+        # Order doesn't affect correctness since _combine_molecules appends
+        # substituent after skeleton, preserving skeleton indices.
+        # Sort by link_index descending for determinism.
+        sorted_assignments = sorted(
+            combination.assignments,
+            key=lambda a: a.skeleton_link_index,
+            reverse=True,
+        )
+
+        current_skeleton = processed_skeleton
+
+        for assignment in sorted_assignments:
+            # Map original link index to current skeleton index
+            new_skel_link = index_map[assignment.skeleton_link_index]
+
+            # Preprocess substituent
+            sub_prep = SubstituentPreprocessor(
+                molecule=assignment.substituent,
+                link_index=assignment.substituent_link_index,
+            )
+            processed_sub = sub_prep.run()
+            new_sub_link = sub_prep.get_new_link_index()
+
+            # Run IterateAnalyzer
+            analyzer = IterateAnalyzer(
+                skeleton=current_skeleton,
+                substituent=processed_sub,
+                skeleton_link_index=new_skel_link,
+                substituent_link_index=new_sub_link,
+                method=combination.method,
+                sphere_direction_samples_num=combination.sphere_direction_samples_num,
+                axial_rotations_sample_num=combination.axial_rotations_sample_num,
+            )
+            result = analyzer.run()
+
+            if result is None:
+                logger.warning(
+                    f"Failed at assignment {assignment.substituent_label}"
+                    f"@{assignment.skeleton_link_index} in {label}"
+                )
+                return (label, None)
+
+            # Use result as new skeleton for next insertion.
+            # Skeleton atoms are at positions 0..n_skel-1 in the combined result,
+            # so index_map values remain valid for remaining assignments.
+            current_skeleton = result
+
+        logger.info(f"Generated multi-site molecule for {label}")
+        return (label, current_skeleton)
+
+    except Exception as e:
+        logger.error(f"Error in multi-site task for {label}: {e}")
+        return (label, None)
+
+
+def _run_multi_site_combination_worker(
+    combination: MultiSiteCombination,
+    result_queue: "multiprocessing.Queue",
+) -> None:
+    """Worker function for multiprocessing a multi-site combination."""
+    try:
+        result_pair = _run_multi_site_combination_task(combination)
         result_queue.put(result_pair)
     except Exception as e:
         logger.error(f"Worker process panic for {combination.label}: {e}")
@@ -676,7 +874,7 @@ class IterateJobRunner(JobRunner):
 
         This method handles all execution logic:
         1. Load molecules from job settings
-        2. Generate all combinations
+        2. Generate all combinations (simple or multi-site)
         3. Run combinations with multiprocessing
         4. Write results to output xyz file
 
@@ -693,20 +891,340 @@ class IterateJobRunner(JobRunner):
             logger.info("Fake mode enabled, not actually running job.")
             return
 
-        # Generate combinations from job settings
-        combinations = self._generate_combinations(job)
-        logger.info(f"Generated {len(combinations)} combination(s)")
-
-        if not combinations:
-            logger.warning("No valid combinations to process.")
-            return
-
-        # Run combinations with multiprocessing
-        results = self.run_combinations(
-            combinations, nprocs=job.nprocs, timeout=job.timeout
+        # Detect mode: multi-site or simple
+        # Multi-site if any skeleton has embedded 'slots'
+        is_multi_site = any(
+            skel.get("slots")
+            for skel in (job.settings.skeleton_list or [])
         )
+
+        if is_multi_site:
+            combinations = self._generate_multi_site_combinations(job)
+            logger.info(
+                f"Generated {len(combinations)} multi-site combination(s)"
+            )
+
+            if not combinations:
+                logger.warning("No valid multi-site combinations to process.")
+                return
+
+            results = self.run_multi_site_combinations(
+                combinations, nprocs=job.nprocs, timeout=job.timeout
+            )
+        else:
+            combinations = self._generate_combinations(job)
+            logger.info(f"Generated {len(combinations)} combination(s)")
+
+            if not combinations:
+                logger.warning("No valid combinations to process.")
+                return
+
+            results = self.run_combinations(
+                combinations, nprocs=job.nprocs, timeout=job.timeout
+            )
 
         # Write output results
         self._write_outputs(results, job)
 
         logger.info("IterateJobRunner completed job")
+
+    def _generate_multi_site_combinations(
+        self, job: "IterateJob"
+    ) -> list[MultiSiteCombination]:
+        """
+        Generate all multi-site combinations from embedded slots and groups.
+
+        Algorithm:
+        1. For each skeleton with 'slots', find substituents whose 'groups'
+           match each slot's group number
+        2. Expand each slot into possible assignments
+           (matching substituent × link_index)
+        3. Cartesian product across all slots within a skeleton
+        4. Filter: no two assignments share the same link_index
+
+        Parameters
+        ----------
+        job : IterateJob
+            The job containing settings
+
+        Returns
+        -------
+        list[MultiSiteCombination]
+            List of all valid multi-site combinations
+        """
+        skeleton_list = job.settings.skeleton_list or []
+        substituent_list = job.settings.substituent_list or []
+        method = job.settings.method
+        sphere_samples = job.settings.sphere_direction_samples_num
+        axial_samples = job.settings.axial_rotations_sample_num
+
+        # Load and index substituents by group number
+        # group_number -> list of (mol, label, link_index)
+        sub_by_group: dict[int, list[tuple]] = {}
+
+        for sub_idx, sub_config in enumerate(substituent_list):
+            groups = sub_config.get("groups")
+            if not groups:
+                continue  # skip substituents without groups
+
+            mol, label = self._load_molecule(
+                sub_config, "substituent", sub_idx
+            )
+            if mol is None:
+                continue
+
+            sub_link_idx = sub_config["link_index"][0]  # 1-based
+
+            for g in groups:
+                if g not in sub_by_group:
+                    sub_by_group[g] = []
+                sub_by_group[g].append((mol, label, sub_link_idx))
+
+        combinations = []
+
+        for skel_idx, skel_config in enumerate(skeleton_list):
+            slots = skel_config.get("slots")
+            if not slots:
+                continue  # skip simple mode skeletons
+
+            skel_mol, skel_label = self._load_molecule(
+                skel_config, "skeleton", skel_idx
+            )
+            if skel_mol is None:
+                continue
+
+            skeleton_indices = skel_config.get("skeleton_indices")
+
+            # Build options for each slot
+            slot_options = []
+
+            for slot in slots:
+                group = slot["group"]
+                link_indices = slot["link_indices"]
+
+                subs_for_group = sub_by_group.get(group, [])
+                if not subs_for_group:
+                    logger.warning(
+                        f"Skeleton '{skel_label}': no substituents "
+                        f"for group {group}, skipping slot."
+                    )
+                    continue
+
+                options = []
+                for sub_mol, sub_label, sub_link_idx in subs_for_group:
+                    for link_idx in link_indices:
+                        assignment = MultiSiteAssignment(
+                            substituent=sub_mol,
+                            substituent_label=sub_label,
+                            substituent_link_index=sub_link_idx,
+                            skeleton_link_index=link_idx,
+                        )
+                        options.append(assignment)
+
+                if options:
+                    slot_options.append(options)
+
+            if not slot_options:
+                logger.warning(
+                    f"Skeleton '{skel_label}': no valid slot options."
+                )
+                continue
+
+            # Cartesian product across slots, then filter
+            for combo in product(*slot_options):
+                assignments = list(combo)
+
+                # Filter: no duplicate link indices
+                link_idxs = [
+                    a.skeleton_link_index for a in assignments
+                ]
+                if len(link_idxs) != len(set(link_idxs)):
+                    continue
+
+                combination = MultiSiteCombination(
+                    skeleton=skel_mol.copy(),
+                    skeleton_label=skel_label,
+                    skeleton_indices=skeleton_indices,
+                    assignments=[
+                        MultiSiteAssignment(
+                            substituent=a.substituent.copy(),
+                            substituent_label=a.substituent_label,
+                            substituent_link_index=a.substituent_link_index,
+                            skeleton_link_index=a.skeleton_link_index,
+                        )
+                        for a in assignments
+                    ],
+                    method=method,
+                    sphere_direction_samples_num=sphere_samples,
+                    axial_rotations_sample_num=axial_samples,
+                )
+                combinations.append(combination)
+                logger.info(
+                    f"Created multi-site combination: {combination.label}"
+                )
+
+        return combinations
+
+    def run_multi_site_combinations(
+        self,
+        combinations: list[MultiSiteCombination],
+        nprocs: int = 1,
+        timeout: float = DEFAULT_WORKER_TIMEOUT,
+    ) -> list[tuple[str, Optional[Molecule]]]:
+        """
+        Run multiple multi-site combinations using multiprocessing.
+
+        Same architecture as run_combinations but for MultiSiteCombination.
+        """
+        if self.fake:
+            logger.info(
+                "Fake mode enabled, not actually running combinations."
+            )
+            return [(c.label, None) for c in combinations]
+
+        if not combinations:
+            logger.warning("No combinations to process.")
+            return []
+
+        logger.info(
+            f"Running {len(combinations)} multi-site combination(s) "
+            f"with {nprocs} process(es), timeout={timeout}s"
+        )
+
+        results_dict: dict[str, Optional[Molecule]] = {}
+        failed_labels: list[str] = []
+        timed_out_labels: list[str] = []
+
+        max_workers = 1 if nprocs == 1 else nprocs
+
+        manager = multiprocessing.Manager()
+        result_queue = manager.Queue()
+
+        try:
+            pending_combinations = deque(combinations)
+            active_processes: dict[
+                int,
+                tuple[multiprocessing.Process, MultiSiteCombination, float],
+            ] = {}
+
+            while pending_combinations or active_processes:
+                while (
+                    pending_combinations
+                    and len(active_processes) < max_workers
+                ):
+                    comb = pending_combinations.popleft()
+                    p = multiprocessing.Process(
+                        target=_run_multi_site_combination_worker,
+                        args=(comb, result_queue),
+                        daemon=True,
+                    )
+                    p.start()
+                    active_processes[id(p)] = (p, comb, time.time())
+
+                while True:
+                    try:
+                        lbl, mol = result_queue.get_nowait()
+                        results_dict[lbl] = mol
+                    except queue.Empty:
+                        break
+                    except Exception:
+                        break
+
+                current_time = time.time()
+                pids_to_remove = []
+
+                for proc_id, (
+                    p,
+                    comb,
+                    start_time,
+                ) in active_processes.items():
+                    if not p.is_alive():
+                        p.join()
+                        pids_to_remove.append(proc_id)
+                    else:
+                        if (current_time - start_time) > timeout:
+                            logger.warning(
+                                f"Timeout ({timeout}s) for {comb.label} "
+                                f"(pid {p.pid}). Terminating..."
+                            )
+                            p.terminate()
+                            p.join(timeout=0.5)
+                            if p.is_alive():
+                                logger.warning(
+                                    f"Process {p.pid} stuck, killing..."
+                                )
+                                p.kill()
+                                p.join(timeout=1.0)
+                            timed_out_labels.append(comb.label)
+                            results_dict[comb.label] = None
+                            pids_to_remove.append(proc_id)
+
+                for proc_id in pids_to_remove:
+                    del active_processes[proc_id]
+
+                if active_processes:
+                    time.sleep(0.1)
+
+            while True:
+                try:
+                    lbl, mol = result_queue.get_nowait()
+                    results_dict[lbl] = mol
+                except queue.Empty:
+                    break
+                except Exception:
+                    break
+
+        finally:
+            manager.shutdown()
+
+        for comb in combinations:
+            if comb.label not in results_dict:
+                logger.error(
+                    f"No result found for {comb.label} - assuming worker crash."
+                )
+                failed_labels.append(comb.label)
+                results_dict[comb.label] = None
+            elif (
+                results_dict[comb.label] is None
+                and comb.label not in timed_out_labels
+            ):
+                if comb.label not in failed_labels:
+                    failed_labels.append(comb.label)
+
+        results = [
+            (comb.label, results_dict.get(comb.label)) for comb in combinations
+        ]
+
+        successful_labels = [
+            label for label, mol in results if mol is not None
+        ]
+        logger.info(
+            f"Completed: {len(successful_labels)}/{len(results)} "
+            f"multi-site molecules generated successfully"
+        )
+
+        if successful_labels or timed_out_labels or failed_labels:
+            logger.info("=" * 40)
+            logger.info("  MULTI-SITE SUMMARY OF RESULTS")
+            logger.info("=" * 40)
+
+            if successful_labels:
+                logger.info(f"Successful ({len(successful_labels)}):")
+                for label in successful_labels:
+                    logger.info(f"  - {label}")
+
+            if timed_out_labels:
+                logger.warning(f"Timed out ({len(timed_out_labels)}):")
+                for label in timed_out_labels:
+                    logger.warning(f"  - {label}")
+
+            if failed_labels:
+                logger.warning(
+                    f"Failed to find solution ({len(failed_labels)}):"
+                )
+                for label in failed_labels:
+                    logger.warning(f"  - {label}")
+
+            logger.info("=" * 40)
+
+        return results

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import tomlkit
 
-from chemsmart.cli.iterate.iterate import validate_config
+from chemsmart.utils.iterate import validate_config
 from chemsmart.jobs.iterate.job import IterateJob
 from chemsmart.jobs.iterate.settings import IterateJobSettings
 
@@ -268,12 +268,12 @@ def test_iterate_validation_fails_on_invalid_link_index(
     """
     from click.testing import CliRunner
 
-    from chemsmart.cli.iterate.iterate import iterate
+    from chemsmart.cli.iterate.toml import toml
 
     runner = CliRunner()
     # Pass obj={} to initialize context object, required by MyGroup middleware
     result = runner.invoke(
-        iterate,
+        toml,
         ["-f", iterate_invalid_skeleton_link_index_config_file],
         obj={},
     )
@@ -296,7 +296,7 @@ def test_iterate_validation_failures_comprehensive(tmpdir):
     """
     from click.testing import CliRunner
 
-    from chemsmart.cli.iterate.iterate import iterate
+    from chemsmart.cli.iterate.toml import toml
 
     test_cases = [
         # Case 1: Skeleton missing file_path
@@ -482,7 +482,7 @@ def test_iterate_validation_failures_comprehensive(tmpdir):
         with open(config_file, "w") as f:
             f.write(config_content)
 
-        result = runner.invoke(iterate, ["-f", str(config_file)], obj={})
+        result = runner.invoke(toml, ["-f", str(config_file)], obj={})
 
         assert (
             result.exit_code != 0
@@ -595,7 +595,7 @@ def test_iterate_cli_pipeline_success(
 
     from click.testing import CliRunner
 
-    from chemsmart.cli.iterate.iterate import iterate
+    from chemsmart.cli.iterate.toml import toml
 
     # Use the renamed config file which represents a valid CLI happy path
     config_file = os.path.join(
@@ -618,7 +618,7 @@ def test_iterate_cli_pipeline_success(
     try:
         # Pass obj={} to initialize context object
         result = runner.invoke(
-            iterate,
+            toml,
             [
                 "-f",
                 config_file,

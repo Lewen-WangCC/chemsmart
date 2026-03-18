@@ -1,7 +1,8 @@
-# Chemsmart Iterate Configuration Template
-# =========================================
-# This template defines skeletons and
-# substituents for iterative structure generation.
+# Chemsmart Iterate Configuration Template (TOML)
+# ================================================
+# Simple mode: each skeleton × each substituent × each link position.
+# For multi-site substitution, use YAML format instead:
+#   chemsmart run iterate yaml -f config.yaml
 #
 # Structure Sources:
 # - file_path: Path to molecular structure
