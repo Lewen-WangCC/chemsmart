@@ -26,16 +26,71 @@ DEFAULT_WORKER_TIMEOUT = 120  # 2 minutes
 
 
 @dataclass
-class IterateCombination:
-    """
-    Represents a single combination of skeleton, link_index, and substituent.
+class IterateMoleculePool:
+    """Shared pool of unique Molecule objects for iterate combinations.
+
+    Avoids duplicating Molecule objects across combinations. Each combination
+    references molecules by index; actual copies are made only at worker
+    dispatch time.
+
+    Attributes
+    ----------
+    skeletons : list[Molecule]
+        Pool of unique skeleton molecules.
+    substituents : list[Molecule]
+        Pool of unique substituent molecules.
     """
 
-    skeleton: Molecule
+    skeletons: list[Molecule] = field(default_factory=list)
+    substituents: list[Molecule] = field(default_factory=list)
+
+
+@dataclass
+class IterateCombination:
+    """A single-site iterate combination: one skeleton + one substituent at one position.
+
+    In simple mode, each combination represents attaching a single substituent
+    to a single link position on the skeleton. The runner generates one
+    IterateCombination per (skeleton, skeleton_link_index, substituent) triple.
+
+    Molecules are stored in a shared IterateMoleculePool and referenced by index.
+    Actual Molecule copies are created only at worker dispatch time.
+
+    Attributes
+    ----------
+    skeleton_idx : int
+        Index into IterateMoleculePool.skeletons.
+    skeleton_label : str
+        Human-readable label for the skeleton (e.g. "benzene").
+    skeleton_link_index : int
+        1-based atom index on the skeleton where the substituent will be
+        attached. The old substituent group at this position is removed
+        during preprocessing.
+    skeleton_indices : list[int] or None
+        1-based atom indices that define which atoms belong to the skeleton
+        core. Used by SkeletonPreprocessor to determine what to keep.
+        None means all atoms are considered skeleton atoms.
+    substituent_idx : int
+        Index into IterateMoleculePool.substituents.
+    substituent_label : str
+        Human-readable label for the substituent (e.g. "methyl").
+    substituent_link_index : int
+        1-based atom index on the substituent that bonds to the skeleton.
+    method : str
+        Optimization method for orientation search.
+        "lagrange_multipliers" (default) or "etkdg".
+    sphere_direction_samples_num : int
+        Number of sphere direction samples for orientation search (default 96).
+    axial_rotations_sample_num : int
+        Number of axial rotation samples per direction (default 6).
+        Total candidates = sphere_direction_samples_num × axial_rotations_sample_num.
+    """
+
+    skeleton_idx: int
     skeleton_label: str
     skeleton_link_index: int  # 1-based
     skeleton_indices: Optional[list[int]]  # 1-based, or None
-    substituent: Molecule
+    substituent_idx: int
     substituent_label: str
     substituent_link_index: int  # 1-based
     method: str = "lagrange_multipliers"
@@ -56,6 +111,7 @@ class IterateCombination:
 
 def _run_combination_task(
     combination: IterateCombination,
+    pool: IterateMoleculePool,
 ) -> tuple[str, Optional[Molecule]]:
     """
     Core logic to run a single combination.
@@ -63,7 +119,9 @@ def _run_combination_task(
     Parameters
     ----------
     combination : IterateCombination
-        The combination to process
+        The combination to process (lightweight, references pool by index)
+    pool : IterateMoleculePool
+        Shared molecule pool; molecules are copied here at execution time
 
     Returns
     -------
@@ -73,9 +131,13 @@ def _run_combination_task(
     label = combination.label
 
     try:
+        # Copy molecules from pool at execution time
+        skeleton = pool.skeletons[combination.skeleton_idx].copy()
+        substituent = pool.substituents[combination.substituent_idx].copy()
+
         # Preprocess skeleton if needed
         skeleton_preprocessor = SkeletonPreprocessor(
-            molecule=combination.skeleton,
+            molecule=skeleton,
             link_index=combination.skeleton_link_index,
             skeleton_indices=combination.skeleton_indices,
         )
@@ -84,7 +146,7 @@ def _run_combination_task(
 
         # Preprocess substituent if needed
         substituent_preprocessor = SubstituentPreprocessor(
-            molecule=combination.substituent,
+            molecule=substituent,
             link_index=combination.substituent_link_index,
         )
         processed_substituent = substituent_preprocessor.run()
@@ -119,6 +181,7 @@ def _run_combination_task(
 
 def _run_combination_worker(
     combination: IterateCombination,
+    pool: IterateMoleculePool,
     result_queue: "multiprocessing.Queue",
 ) -> None:
     """
@@ -128,11 +191,13 @@ def _run_combination_worker(
     ----------
     combination : IterateCombination
         The combination to process
+    pool : IterateMoleculePool
+        Shared molecule pool
     result_queue : multiprocessing.Queue
         Queue to put the result tuple
     """
     try:
-        result_pair = _run_combination_task(combination)
+        result_pair = _run_combination_task(combination, pool)
         result_queue.put(result_pair)
     except Exception as e:
         logger.error(f"Worker process panic for {combination.label}: {e}")
@@ -141,7 +206,25 @@ def _run_combination_worker(
 
 @dataclass
 class MultiSiteAssignment:
-    """One slot's resolved assignment in a multi-site combination."""
+    """One slot's resolved assignment in a multi-site combination.
+
+    Represents which substituent is attached at which skeleton position for
+    a single slot. A MultiSiteCombination contains multiple MultiSiteAssignment
+    instances — one per slot — to fully describe a multi-site substitution.
+
+    Attributes
+    ----------
+    substituent : Molecule
+        The substituent molecule to attach at this slot.
+    substituent_label : str
+        Human-readable label for the substituent (e.g. "methyl").
+    substituent_link_index : int
+        1-based atom index on the substituent that bonds to the skeleton.
+    skeleton_link_index : int
+        1-based atom index on the **original** skeleton where this
+        substituent will be attached. Mapped to the preprocessed skeleton
+        index via index_map during execution.
+    """
 
     substituent: Molecule
     substituent_label: str
@@ -151,7 +234,39 @@ class MultiSiteAssignment:
 
 @dataclass
 class MultiSiteCombination:
-    """A full multi-site combination: one skeleton with multiple slot assignments."""
+    """A multi-site iterate combination: one skeleton with simultaneous substitutions.
+
+    In multi-site mode, multiple substituents are attached to different
+    positions on the same skeleton in one pass. This dataclass holds the
+    skeleton together with all slot assignments. During execution:
+
+    1. Batch preprocessing removes old groups at ALL assignment positions.
+    2. Substituents are sequentially inserted (order: descending link_index).
+    3. Each insertion uses IterateAnalyzer; the result becomes the new
+       skeleton for the next insertion.
+
+    Attributes
+    ----------
+    skeleton : Molecule
+        The skeleton molecule (a deep copy for this combination).
+    skeleton_label : str
+        Human-readable label for the skeleton.
+    skeleton_indices : list[int] or None
+        1-based atom indices defining the skeleton core. None means all
+        atoms are skeleton atoms.
+    assignments : list[MultiSiteAssignment]
+        One assignment per slot, each specifying a substituent and the
+        skeleton position it occupies. No two assignments may share the
+        same skeleton_link_index (enforced during combination generation).
+    method : str
+        Optimization method for orientation search.
+        "lagrange_multipliers" (default) or "etkdg".
+    sphere_direction_samples_num : int
+        Number of sphere direction samples for orientation search (default 96).
+    axial_rotations_sample_num : int
+        Number of axial rotation samples per direction (default 6).
+        Total candidates = sphere_direction_samples_num × axial_rotations_sample_num.
+    """
 
     skeleton: Molecule
     skeleton_label: str
@@ -379,7 +494,7 @@ class IterateJobRunner(JobRunner):
         return None
 
     def run_single(
-        self, combination: IterateCombination
+        self, combination: IterateCombination, pool: IterateMoleculePool
     ) -> tuple[str, Optional[Molecule]]:
         """
         Run a single combination to generate a combined molecule.
@@ -388,6 +503,8 @@ class IterateJobRunner(JobRunner):
         ----------
         combination : IterateCombination
             The combination to process
+        pool : IterateMoleculePool
+            Shared molecule pool
 
         Returns
         -------
@@ -400,10 +517,11 @@ class IterateJobRunner(JobRunner):
             )
             return (combination.label, None)
 
-        return _run_combination_task(combination)
+        return _run_combination_task(combination, pool)
 
     def run_combinations(
         self,
+        pool: IterateMoleculePool,
         combinations: list[IterateCombination],
         nprocs: int = 1,
         timeout: float = DEFAULT_WORKER_TIMEOUT,
@@ -418,6 +536,8 @@ class IterateJobRunner(JobRunner):
 
         Parameters
         ----------
+        pool : IterateMoleculePool
+            Shared molecule pool; workers copy molecules at execution time
         combinations : list[IterateCombination]
             List of combinations to process
         nprocs : int
@@ -473,7 +593,7 @@ class IterateJobRunner(JobRunner):
                     comb = pending_combinations.popleft()
                     p = multiprocessing.Process(
                         target=_run_combination_worker,
-                        args=(comb, result_queue),
+                        args=(comb, pool, result_queue),
                         daemon=True,
                     )
                     p.start()
@@ -686,10 +806,13 @@ class IterateJobRunner(JobRunner):
 
     def _generate_combinations(
         self, job: "IterateJob"
-    ) -> list[IterateCombination]:
+    ) -> tuple[IterateMoleculePool, list[IterateCombination]]:
         """
         Generate all combinations of (skeleton,
         skeleton_link_index, substituent).
+
+        Molecules are loaded once into a shared IterateMoleculePool. Combinations
+        reference molecules by index, avoiding redundant copies.
 
         Parameters
         ----------
@@ -698,9 +821,10 @@ class IterateJobRunner(JobRunner):
 
         Returns
         -------
-        list[IterateCombination]
-            List of all valid combinations
+        tuple[IterateMoleculePool, list[IterateCombination]]
+            Shared molecule pool and list of all valid combinations
         """
+        pool = IterateMoleculePool()
         combinations = []
 
         skeleton_list = job.settings.skeleton_list or []
@@ -719,7 +843,6 @@ class IterateJobRunner(JobRunner):
             if skeleton is None:
                 continue
 
-            # skel_label is returned by _load_molecule
             skel_link_indices = skel_config.get(
                 "link_index"
             )  # list[int], 1-based
@@ -730,7 +853,9 @@ class IterateJobRunner(JobRunner):
                 )
                 continue
 
-            valid_skeletons.append((skeleton, skel_label, skel_config))
+            pool_idx = len(pool.skeletons)
+            pool.skeletons.append(skeleton)
+            valid_skeletons.append((pool_idx, skel_label, skel_config))
 
         valid_substituents = []
         for sub_idx, sub_config in enumerate(substituent_list):
@@ -740,7 +865,6 @@ class IterateJobRunner(JobRunner):
             if substituent is None:
                 continue
 
-            # sub_label is returned by _load_molecule
             sub_link_index = sub_config.get("link_index")  # list[int], 1-based
 
             if not sub_link_index:
@@ -749,10 +873,11 @@ class IterateJobRunner(JobRunner):
                 )
                 continue
 
-            valid_substituents.append((substituent, sub_label, sub_config))
+            pool_idx = len(pool.substituents)
+            pool.substituents.append(substituent)
+            valid_substituents.append((pool_idx, sub_label, sub_config))
 
-        for skeleton, skel_label, skel_config in valid_skeletons:
-            # skel_label is returned by _load_molecule
+        for skel_pool_idx, skel_label, skel_config in valid_skeletons:
             skel_link_indices = skel_config.get(
                 "link_index"
             )  # list[int], 1-based
@@ -760,8 +885,7 @@ class IterateJobRunner(JobRunner):
                 "skeleton_indices"
             )  # list[int] or None
 
-            for substituent, sub_label, sub_config in valid_substituents:
-                # sub_label is returned by _load_molecule
+            for sub_pool_idx, sub_label, sub_config in valid_substituents:
                 sub_link_index = sub_config.get(
                     "link_index"
                 )  # list[int], 1-based
@@ -772,11 +896,11 @@ class IterateJobRunner(JobRunner):
                 # For each skeleton link position, create a combination
                 for skel_link_idx in skel_link_indices:
                     combination = IterateCombination(
-                        skeleton=skeleton.copy(),
+                        skeleton_idx=skel_pool_idx,
                         skeleton_label=skel_label,
                         skeleton_link_index=skel_link_idx,
                         skeleton_indices=skeleton_indices,
-                        substituent=substituent.copy(),
+                        substituent_idx=sub_pool_idx,
                         substituent_label=sub_label,
                         sphere_direction_samples_num=sphere_direction_samples_num,
                         axial_rotations_sample_num=axial_rotations_sample_num,
@@ -786,7 +910,7 @@ class IterateJobRunner(JobRunner):
                     combinations.append(combination)
                     logger.info(f"Created combination: {combination.label}")
 
-        return combinations
+        return pool, combinations
 
     def _write_outputs(
         self, results: list[tuple[str, Optional[Molecule]]], job: "IterateJob"
@@ -912,7 +1036,7 @@ class IterateJobRunner(JobRunner):
                 combinations, nprocs=job.nprocs, timeout=job.timeout
             )
         else:
-            combinations = self._generate_combinations(job)
+            pool, combinations = self._generate_combinations(job)
             logger.info(f"Generated {len(combinations)} combination(s)")
 
             if not combinations:
@@ -920,7 +1044,7 @@ class IterateJobRunner(JobRunner):
                 return
 
             results = self.run_combinations(
-                combinations, nprocs=job.nprocs, timeout=job.timeout
+                pool, combinations, nprocs=job.nprocs, timeout=job.timeout
             )
 
         # Write output results
@@ -1009,7 +1133,8 @@ class IterateJobRunner(JobRunner):
                         f"for group {group}, skipping slot."
                     )
                     continue
-
+                
+                # Build options for single slot
                 options = []
                 for sub_mol, sub_label, sub_link_idx in subs_for_group:
                     for link_idx in link_indices:
@@ -1030,16 +1155,44 @@ class IterateJobRunner(JobRunner):
                 )
                 continue
 
-            # Cartesian product across slots, then filter
-            for combo in product(*slot_options):
-                assignments = list(combo)
+            # Reorganize by individual skeleton position.
+            # Each position independently chooses: None (skip) or one
+            # candidate substituent. This produces the power set of all
+            # valid assignments, naturally avoiding duplicate positions.
+            position_options: dict[int, list[MultiSiteAssignment]] = {}
 
-                # Filter: no duplicate link indices
-                link_idxs = [
-                    a.skeleton_link_index for a in assignments
-                ]
-                if len(link_idxs) != len(set(link_idxs)):
-                    continue
+            for options_list in slot_options:
+                for assignment in options_list:
+                    pos = assignment.skeleton_link_index
+                    if pos not in position_options:
+                        position_options[pos] = []
+                    # Deduplicate: same substituent at same position
+                    # may appear from overlapping groups
+                    is_dup = any(
+                        existing.substituent_label == assignment.substituent_label
+                        and existing.substituent_link_index == assignment.substituent_link_index
+                        for existing in position_options[pos]
+                    )
+                    if not is_dup:
+                        position_options[pos].append(assignment)
+
+            if not position_options:
+                logger.warning(
+                    f"Skeleton '{skel_label}': no valid position options."
+                )
+                continue
+
+            # For each position: [None (don't fill), candidate1, candidate2, ...]
+            sorted_positions = sorted(position_options.keys())
+            per_position_choices = []
+            for pos in sorted_positions:
+                per_position_choices.append([None] + position_options[pos])
+
+            # Cartesian product across all positions
+            for combo in product(*per_position_choices):
+                assignments = [a for a in combo if a is not None]
+                if not assignments:
+                    continue  # skip the all-empty case
 
                 combination = MultiSiteCombination(
                     skeleton=skel_mol.copy(),
