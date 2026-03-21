@@ -1760,50 +1760,56 @@ def iterate_test_directory(test_data_directory):
 
 
 @pytest.fixture()
-def iterate_input_directory(iterate_test_directory):
-    """Returns the absolute path to tests/data/IterateTests/input."""
-    return os.path.join(iterate_test_directory, "input")
+def iterate_yaml_directory(iterate_test_directory):
+    """Returns the absolute path to tests/data/IterateTests/yaml."""
+    return os.path.join(iterate_test_directory, "yaml")
 
 
 @pytest.fixture()
-def iterate_expected_output_directory(iterate_test_directory):
-    """Returns the absolute path to tests/data/IterateTests/expected_output."""
-    return os.path.join(iterate_test_directory, "expected_output")
+def iterate_input_directory(iterate_yaml_directory):
+    """Returns the absolute path to tests/data/IterateTests/yaml/input."""
+    return os.path.join(iterate_yaml_directory, "input")
 
 
 @pytest.fixture()
-def iterate_configs_directory(iterate_test_directory):
-    """Returns the absolute path to tests/data/IterateTests/configs."""
-    return os.path.join(iterate_test_directory, "configs")
+def iterate_expected_output_directory(iterate_yaml_directory):
+    """Returns the absolute path to tests/data/IterateTests/yaml/expected_output."""
+    return os.path.join(iterate_yaml_directory, "expected_output")
+
+
+@pytest.fixture()
+def iterate_configs_directory(iterate_yaml_directory):
+    """Returns the absolute path to tests/data/IterateTests/yaml/configs."""
+    return os.path.join(iterate_yaml_directory, "configs")
 
 
 @pytest.fixture()
 def iterate_integration_config_file(iterate_configs_directory):
     """Returns the absolute path to
-    tests/data/IterateTests/configs/integration_iterate.toml."""
-    return os.path.join(iterate_configs_directory, "integration_iterate.toml")
+    tests/data/IterateTests/yaml/configs/integration_iterate.yaml."""
+    return os.path.join(iterate_configs_directory, "integration_iterate.yaml")
 
 
 @pytest.fixture()
 def iterate_timeout_config_file(iterate_configs_directory):
     """Returns the absolute path to
-    tests/data/IterateTests/configs/timeout_iterate.toml."""
-    return os.path.join(iterate_configs_directory, "timeout_iterate.toml")
+    tests/data/IterateTests/yaml/configs/timeout_iterate.yaml."""
+    return os.path.join(iterate_configs_directory, "timeout_iterate.yaml")
 
 
 @pytest.fixture()
 def iterate_template_file(iterate_configs_directory):
     """Returns the absolute path to
-    tests/data/IterateTests/configs/iterate_template.toml."""
-    return os.path.join(iterate_configs_directory, "iterate_template.toml")
+    tests/data/IterateTests/yaml/configs/iterate_template.yaml."""
+    return os.path.join(iterate_configs_directory, "iterate_template.yaml")
 
 
 @pytest.fixture()
 def iterate_invalid_skeleton_link_index_config_file(iterate_configs_directory):
-    """Returns the absolute path to tests/data/IterateTests/configs/
-    invalid_skeleton_link_index.toml."""
+    """Returns the absolute path to tests/data/IterateTests/yaml/configs/
+    invalid_skeleton_link_index.yaml."""
     return os.path.join(
-        iterate_configs_directory, "invalid_skeleton_link_index.toml"
+        iterate_configs_directory, "invalid_skeleton_link_index.yaml"
     )
 
 

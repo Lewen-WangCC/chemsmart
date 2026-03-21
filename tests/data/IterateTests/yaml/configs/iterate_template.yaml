@@ -1,0 +1,43 @@
+# Chemsmart Iterate Configuration Template (YAML)
+# ================================================
+#
+# Each skeleton contributes to a global contiguous 1-based group sequence:
+#   - Skeleton with "link_index": occupies one implicit group per skeleton.
+#   - Skeleton with "slots":      occupies one group per slot.
+#
+# Substituents declare which groups they can fill via the "groups" field.
+#
+# RULES:
+#   - A skeleton must have EITHER link_index OR slots, not both.
+#   - Group numbers must be globally contiguous starting from 1.
+#   - All substituents must specify "groups".
+#   - Atom indices are 1-based (first atom is index 1).
+#   - If skeleton_indices is specified, it must include all link atoms.
+
+skeletons:
+  # === link_index shorthand (auto-assigned group 1) ===
+  - file_path: "/path/to/skeleton1.xyz"
+    label: "benzene_core"
+    link_index: "6,7,8"
+    skeleton_indices: "1-5"    # optional: atoms to keep
+
+  # === Explicit slots (groups 2, 3) ===
+  # - file_path: "/path/to/complex_skeleton.xyz"
+  #   label: "complex_skel"
+  #   skeleton_indices: "1-30"  # optional
+  #   slots:
+  #     - group: 2
+  #       link_indices: "10,11"
+  #     - group: 3
+  #       link_indices: "25"
+
+substituents:
+  - file_path: "/path/to/methyl.xyz"
+    label: "methyl"
+    link_index: 1
+    groups: [1]          # available for group 1 (skeleton1)
+
+  # - file_path: "/path/to/ethyl.xyz"
+  #   label: "ethyl"
+  #   link_index: 1
+  #   groups: [1, 2, 3]  # available for groups 1, 2, and 3

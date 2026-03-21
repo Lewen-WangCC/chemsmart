@@ -2,9 +2,9 @@ import os
 
 import numpy as np
 import pytest
-import tomlkit
+import yaml
 
-from chemsmart.utils.iterate import validate_config
+from chemsmart.utils.iterate import validate_yaml_config
 from chemsmart.jobs.iterate.job import IterateJob
 from chemsmart.jobs.iterate.settings import IterateJobSettings
 
@@ -20,20 +20,20 @@ def test_iterate_integration_workflow(
 ):
     """
     Test the full Iterate workflow (Integration Test):
-    1. Load config from TOML (integration_iterate.toml)
+    1. Load config from YAML (integration_iterate.yaml)
     2. Run IterateJob
     3. Compare output with expected XYZ file
     """
-    # Change CWD to input directory so relative paths in TOML work
+    # Change CWD to input directory so relative paths in YAML work
     original_cwd = os.getcwd()
     os.chdir(iterate_input_directory)
 
     try:
         # 1. Load and validate configuration
         with open(iterate_integration_config_file, "r") as f:
-            raw_config = tomlkit.load(f).unwrap()
+            raw_config = yaml.safe_load(f)
 
-        config = validate_config(raw_config, iterate_integration_config_file)
+        config = validate_yaml_config(raw_config, iterate_integration_config_file)
 
         # 2. Setup Job Settings
         job_settings = IterateJobSettings(
@@ -173,8 +173,8 @@ def test_iterate_timeout(
     try:
         # 1. Load Config
         with open(iterate_timeout_config_file, "r") as f:
-            raw_config = tomlkit.load(f).unwrap()
-        config = validate_config(raw_config, iterate_timeout_config_file)
+            raw_config = yaml.safe_load(f)
+        config = validate_yaml_config(raw_config, iterate_timeout_config_file)
 
         # 2. Setup Job with very short timeout
         job_settings = IterateJobSettings(
@@ -227,11 +227,11 @@ def test_iterate_template_generation(tmpdir, iterate_template_file):
     Test that the iterate configuration template is
     generated correctly and matches the golden copy.
     """
-    from chemsmart.utils.iterate import generate_template
+    from chemsmart.utils.iterate import generate_yaml_template
 
     # 1. Generate template
-    generated_path = tmpdir / "test_template.toml"
-    generate_template(str(generated_path))
+    generated_path = tmpdir / "test_template.yaml"
+    generate_yaml_template(str(generated_path))
 
     # 2. Assert file exists
     assert generated_path.exists()
@@ -248,10 +248,8 @@ def test_iterate_template_generation(tmpdir, iterate_template_file):
         generated_content.strip() == expected_content.strip()
     ), "Generated template does not match expected template content."
 
-    # 4. Verify it is valid TOML
-    import tomlkit
-
-    parsed = tomlkit.parse(generated_content)
+    # 4. Verify it is valid YAML
+    parsed = yaml.safe_load(generated_content)
     assert "skeletons" in parsed
     assert "substituents" in parsed
     assert len(parsed["skeletons"]) == 1  # Based on current template examples
@@ -268,12 +266,12 @@ def test_iterate_validation_fails_on_invalid_link_index(
     """
     from click.testing import CliRunner
 
-    from chemsmart.cli.iterate.toml import toml
+    from chemsmart.cli.iterate.yaml_cmd import yaml_cmd
 
     runner = CliRunner()
     # Pass obj={} to initialize context object, required by MyGroup middleware
     result = runner.invoke(
-        toml,
+        yaml_cmd,
         ["-f", iterate_invalid_skeleton_link_index_config_file],
         obj={},
     )
@@ -296,178 +294,184 @@ def test_iterate_validation_failures_comprehensive(tmpdir):
     """
     from click.testing import CliRunner
 
-    from chemsmart.cli.iterate.toml import toml
+    from chemsmart.cli.iterate.yaml_cmd import yaml_cmd
 
     test_cases = [
         # Case 1: Skeleton missing file_path
         (
-            """
-            [[skeletons]]
-            label = "s1"
-            link_index = "1"
-            [[substituents]]
-            file_path = "sub.xyz"
-            label = "sub1"
-            link_index = "1"
-            """,
+            """\
+skeletons:
+  - label: "s1"
+    link_index: "1"
+substituents:
+  - file_path: "sub.xyz"
+    label: "sub1"
+    link_index: "1"
+    groups: [1]
+""",
             ["Missing required field 'file_path'", "Skeleton entry 1"],
             "Skeleton missing file_path",
         ),
         # Case 2: Substituent missing file_path
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            [[substituents]]
-            label = "sub1"
-            link_index = "1"
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+substituents:
+  - label: "sub1"
+    link_index: "1"
+    groups: [1]
+""",
             ["Missing required field 'file_path'", "Substituent entry 1"],
             "Substituent missing file_path",
         ),
         # Case 3: Skeleton has forbidden key 'smiles'
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            smiles = "C"
-            [[substituents]]
-            file_path = "sub.xyz"
-            label = "sub1"
-            link_index = "1"
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+    smiles: "C"
+substituents:
+  - file_path: "sub.xyz"
+    label: "sub1"
+    link_index: "1"
+    groups: [1]
+""",
             ["Unknown key(s) in skeleton entry 1", "{'smiles'}"],
             "Skeleton forbidden key smiles",
         ),
         # Case 4: Substituent has forbidden key 'pubchem'
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            [[substituents]]
-            file_path = "sub.xyz"
-            label = "sub1"
-            link_index = "1"
-            pubchem = "100"
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+substituents:
+  - file_path: "sub.xyz"
+    label: "sub1"
+    link_index: "1"
+    pubchem: "100"
+    groups: [1]
+""",
             ["Unknown key(s) in substituent entry 1", "{'pubchem'}"],
             "Substituent forbidden key pubchem",
         ),
         # Case 5: Random garbage key
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            random_key = "garbage"
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+    random_key: "garbage"
+""",
             ["Unknown key(s) in skeleton entry 1", "{'random_key'}"],
             "Skeleton random garbage key",
         ),
         # Case 6: Zero link_index (S2 Check)
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "0" 
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "0"
+""",
             ["Found invalid index <= 0", "link_index"],
             "Skeleton zero link_index",
         ),
         # Case 7: Negative skeleton_indices (S2 Check)
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            skeleton_indices = [1, -5, 3]
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+    skeleton_indices: [1, -5, 3]
+""",
             ["Found invalid index <= 0", "skeleton_indices"],
             "Skeleton negative skeleton_indices",
         ),
         # Case 8: Empty skeleton_indices (S2 Check - Updated)
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            skeleton_indices = []
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+    skeleton_indices: []
+""",
             ["Found empty list in 'skeleton_indices'", "Skeleton entry 1"],
             "Skeleton empty skeleton_indices",
         ),
         # Case 9: Empty link_index (S2 Check - Updated)
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = []
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: []
+""",
             ["Found empty list in 'link_index'", "Skeleton entry 1"],
             "Skeleton empty link_index",
         ),
         # Case 10: Substituent multiple link_indices (S3 Check)
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            [[substituents]]
-            file_path = "sub.xyz"
-            label = "sub1"
-            link_index = "1, 2" 
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+substituents:
+  - file_path: "sub.xyz"
+    label: "sub1"
+    link_index: "1, 2"
+    groups: [1]
+""",
             ["Multiple values found in 'link_index'", "exactly one link atom"],
             "Substituent multiple link_index",
         ),
         # Case 11: Skeleton label with invalid
         # characters (S4 Check: Safe Label)
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1/unsafe"
-            link_index = "1"
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1/unsafe"
+    link_index: "1"
+""",
             ["Contains invalid characters", "Allowed characters"],
             "Skeleton label unsafe characters",
         ),
         # Case 12: Substituent label with invalid
         # characters (S4 Check: Safe Label)
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1"
-            link_index = "1"
-            [[substituents]]
-            file_path = "sub.xyz"
-            label = "sub .. 1"
-            link_index = "1"
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1"
+    link_index: "1"
+substituents:
+  - file_path: "sub.xyz"
+    label: "sub .. 1"
+    link_index: "1"
+    groups: [1]
+""",
             ["Contains invalid characters", "Allowed characters"],
             "Substituent label unsafe characters",
         ),
         # Case 13: Label with space
         (
-            """
-            [[skeletons]]
-            file_path = "skel.xyz"
-            label = "s1 "
-            link_index = "1"
-            """,
+            """\
+skeletons:
+  - file_path: "skel.xyz"
+    label: "s1 "
+    link_index: "1"
+""",
             ["Contains invalid characters"],
             "Label with space",
         ),
@@ -478,11 +482,11 @@ def test_iterate_validation_failures_comprehensive(tmpdir):
     for idx, (config_content, expected_fragments, case_name) in enumerate(
         test_cases
     ):
-        config_file = tmpdir / f"test_config_{idx}.toml"
+        config_file = tmpdir / f"test_config_{idx}.yaml"
         with open(config_file, "w") as f:
             f.write(config_content)
 
-        result = runner.invoke(toml, ["-f", str(config_file)], obj={})
+        result = runner.invoke(yaml_cmd, ["-f", str(config_file)], obj={})
 
         assert (
             result.exit_code != 0
@@ -586,7 +590,7 @@ def test_iterate_cli_pipeline_success(
 ):
     """
     Test the full Iterate pipeline via the CLI:
-    1. Run 'chemsmart iterate -f config.toml'
+    1. Run 'chemsmart iterate yaml -f config.yaml'
     2. Verify success exit code
     3. Verify output file exists and matches expected content.
     This ensures that the CLI entry point
@@ -595,11 +599,11 @@ def test_iterate_cli_pipeline_success(
 
     from click.testing import CliRunner
 
-    from chemsmart.cli.iterate.toml import toml
+    from chemsmart.cli.iterate.yaml_cmd import yaml_cmd
 
     # Use the renamed config file which represents a valid CLI happy path
     config_file = os.path.join(
-        iterate_configs_directory, "cli_happy_path.toml"
+        iterate_configs_directory, "cli_happy_path.yaml"
     )
     expected_output_file = os.path.join(
         iterate_expected_output_directory, "cli_happy_path.xyz"
@@ -618,7 +622,7 @@ def test_iterate_cli_pipeline_success(
     try:
         # Pass obj={} to initialize context object
         result = runner.invoke(
-            toml,
+            yaml_cmd,
             [
                 "-f",
                 config_file,
