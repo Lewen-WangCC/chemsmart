@@ -4,7 +4,6 @@ import shutil
 import pytest
 
 from chemsmart.io.molecules.structure import Molecule
-from chemsmart.utils.utils import quote_path
 from chemsmart.jobs.mol import PyMOLHybridVisualizationJob
 from chemsmart.jobs.mol.align import PyMOLAlignJob
 from chemsmart.jobs.mol.irc import PyMOLIRCMovieJob
@@ -21,6 +20,7 @@ from chemsmart.utils.cluster import (
     is_pubchem_api_available,
     is_pubchem_network_available,
 )
+from chemsmart.utils.utils import quote_path
 
 
 @pytest.fixture(scope="session")
