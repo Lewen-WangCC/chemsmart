@@ -286,13 +286,9 @@ class PyMOLJob(Job):
         if label is None:
             # by default, if no label is given and the job is read in
             # from a file, the label is set to the file basename
-            label = os.path.basename(filename).splitext(
-                os.path.basename(filename)
-            )[0]
+            label = os.path.splitext(os.path.basename(filename))[0]
 
-        source_basename = os.path.basename(filename).splitext(
-            os.path.basename(filename)
-        )[0]
+        source_basename = os.path.splitext(os.path.basename(filename))[0]
 
         logger.info(f"Num of molecules read: {len(molecules)}.")
         molecules = molecules[string2index_1based(index)]
