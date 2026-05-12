@@ -1588,7 +1588,7 @@ class PyMOLSpinJobRunner(PyMOLVisualizationJobRunner):
         """
         gaussian_exe = self._get_gaussian_executable(job)
 
-        cubegen_command = f"{gaussian_exe}/cubegen 0 spin {job.label}.fchk {job.job_basename}.cube {job.npts}"
+        cubegen_command = f"{gaussian_exe}/cubegen 0 spin {job.source_basename}.fchk {job.job_basename}.cube {job.npts}"
         run_command(cubegen_command)
 
     def _write_spin_density_pml(self, job):
