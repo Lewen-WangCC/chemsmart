@@ -52,6 +52,7 @@ def spin(
 
     # get label for the job
     label = ctx.obj["label"]
+    source_basename = ctx.obj["source_basename"]
     if coordinates is not None:
         logger.debug(f"Coordinates for visualization: {coordinates}")
         try:
@@ -69,6 +70,7 @@ def spin(
     return PyMOLSpinJob(
         molecule=molecules,
         label=label,
+        source_basename=source_basename,
         pymol_script=file,
         style=style,
         trace=trace,
