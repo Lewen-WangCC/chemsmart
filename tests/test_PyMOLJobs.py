@@ -4,6 +4,7 @@ import shutil
 import pytest
 
 from chemsmart.io.molecules.structure import Molecule
+from chemsmart.utils.utils import quote_path
 from chemsmart.jobs.mol import PyMOLHybridVisualizationJob
 from chemsmart.jobs.mol.align import PyMOLAlignJob
 from chemsmart.jobs.mol.irc import PyMOLIRCMovieJob
@@ -876,6 +877,6 @@ class TestPyMOLFileProcessingUsesSourceFilename:
         command = runner._load_cube_files(job, "cmd")
         command = runner._run_nci_command(job, command)
 
-        assert f"load {dens_file}" in command
-        assert f"load {grad_file}" in command
+        assert f"load {quote_path(dens_file)}" in command
+        assert f"load {quote_path(grad_file)}" in command
         assert "; nci benzene_opt" in command
