@@ -371,6 +371,7 @@ def mol(
     ctx.ensure_object(dict)
     # mark this pipeline as not QMMM by default
     ctx.obj.setdefault("qmmm", False)
+    ctx.obj.setdefault("source_basename", None)
     ctx.obj["label_provided"] = label is not None
     molecules = None
     source_basename = None

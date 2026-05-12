@@ -290,7 +290,6 @@ class PyMOLJob(Job):
 
         source_basename = os.path.splitext(os.path.basename(filename))[0]
 
-        logger.info(f"Num of molecules read: {len(molecules)}.")
         molecules = molecules[string2index_1based(index)]
         logger.info(f"Num of molecules to use: {len(molecules)}.")
 
