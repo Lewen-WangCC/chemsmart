@@ -187,6 +187,11 @@ def _validate_bool(value) -> None:
         raise ValueError("expected a boolean")
 
 
+def _validate_quality_mode(value) -> None:
+    if not isinstance(value, str) or value not in ("strict", "warn", "off"):
+        raise ValueError('expected strict, warn or off (quote "off" in YAML)')
+
+
 def _validate_force_field(value) -> None:
     choices = ("none", "uff", "mmff94", "mmff94s")
     if not isinstance(value, str) or value.lower() not in choices:
@@ -266,6 +271,7 @@ _ALGORITHM_SPECS = (
         canonical_name="jlgo",
         aliases=("jlgo", "lagrange", "lagrange_multipliers"),
         default_options={
+            "quality_mode": "strict",
             # Adaptive sampling first runs a fixed coarse stage; the six
             # full-stage sampling/pruning parameters (n_link_sphere,
             # n_orientation_sphere, n_axial, candidate_pool_size, preselect,
@@ -291,6 +297,7 @@ _ALGORITHM_SPECS = (
             "slsqp_maxiter": 200,
         },
         option_validators={
+            "quality_mode": _validate_quality_mode,
             "use_adaptive_sampling": _validate_bool,
             "n_link_sphere": _validate_positive_int,
             "n_orientation_sphere": _validate_positive_int,

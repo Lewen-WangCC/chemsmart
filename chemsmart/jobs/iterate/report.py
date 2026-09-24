@@ -95,6 +95,10 @@ class CombinationResult:
     error_message: Optional[str] = None
     output_path: Optional[str] = None
     structure_index: Optional[int] = None
+    # Optional analyzer diagnostics, transported from worker to parent.
+    quality_mode: Optional[str] = None
+    quality_ok: Optional[bool] = None
+    quality_metrics: dict[str, float] = field(default_factory=dict)
 
 
 def summarize_results(results: list, input_error_count: int = 0) -> dict:
@@ -368,6 +372,26 @@ class IterateReport:
                 f"   {r.combination_number:>3}  "
                 f"{r.execution_status:<12}  {dur:>8}  {r.label}"
             )
+            if r.quality_mode is not None:
+                quality = "PASS" if r.quality_ok else "FAIL"
+                lines.append(
+                    f"        Quality: {quality}; mode={r.quality_mode}"
+                )
+                if r.quality_mode == "warn" and r.quality_ok is False:
+                    lines.append(
+                        "        WARNING: quality checks failed; exported "
+                        "hard-feasible candidate."
+                    )
+                elif r.quality_mode == "off":
+                    lines.append(
+                        "        Quality rejection and repair disabled; "
+                        "metrics are informational."
+                    )
+                for key in ("min_nonbond", "n_close_20", "vdw075_overlap_sum"):
+                    if key in r.quality_metrics:
+                        lines.append(
+                            f"        {key}: {r.quality_metrics[key]:.9g}"
+                        )
         return lines
 
     def _render_failed(self) -> list:

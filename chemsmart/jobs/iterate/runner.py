@@ -380,6 +380,7 @@ def _run_combination_task(
             execution_status=STATUS_SUCCESS,
             molecule=result,
             duration_seconds=duration,
+            **getattr(analyzer, "quality_details", {}),
         )
 
     except Exception as e:

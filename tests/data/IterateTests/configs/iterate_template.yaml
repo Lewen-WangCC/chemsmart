@@ -42,6 +42,9 @@ algorithm:
   # --- JLGO (Joint Lagrange Geometry Optimization) ---
   # name: jlgo
   # options:
+  #   quality_mode: strict          # strict / warn / "off" (quote in YAML)
+  #   # warn exports a hard-feasible candidate if quality search fails.
+  #   # off skips quality rejection/repair; metrics remain in the report.
   #   use_adaptive_sampling: true
   #   n_link_sphere: 48
   #   n_orientation_sphere: 24

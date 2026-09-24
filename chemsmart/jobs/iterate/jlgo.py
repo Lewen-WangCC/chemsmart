@@ -140,9 +140,14 @@ class JointLagrangeConfig:
         Whether to stop the remaining multi-start computation after the first
         acceptable result is obtained.
     use_quality_early_stop:
-        Whether a result must pass the structural quality gate before it is
-        accepted and triggers early stop. When disabled, any numerically
-        feasible SLSQP result can trigger early stop.
+        Whether a quality-passing result triggers multi-start early stop.
+        Acceptance is controlled separately by ``quality_mode``.
+    quality_mode:
+        ``strict`` rejects quality failures (default). ``warn`` completes
+        the same search and repair, then returns the closest hard-feasible
+        quality reject only if no passing result exists. ``off`` skips
+        quality rejection and repair. Metrics are still computed in all
+        modes; warn/off require finite coordinates and hard feasibility.
     use_slsqp_fallback:
         When none of the callback-SLSQP starts are accepted, whether to rerun
         ordinary SLSQP (without the callback) on the same starts. Only
@@ -323,11 +328,14 @@ class JointLagrangeConfig:
     detection_min_iterations: int = 9
     detection_tolerance: float = 2e-4
 
+    quality_mode: str = "strict"
     quality_max_close_20: int = 0
     quality_max_vdw75_overlap: float = 0.793427816544153
     quality_min_nonbond: float = 2.00
 
     def validate(self) -> None:
+        if self.quality_mode not in ("strict", "warn", "off"):
+            raise ValueError("quality_mode must be strict, warn or off")
         integer_fields = {
             "n_link_sphere": self.n_link_sphere,
             "n_orientation_sphere": self.n_orientation_sphere,
@@ -1713,8 +1721,9 @@ class JointLagrangeOptimizer:
 
         Each adaptive sampling level receives at most one quality-repair
         attempt. A repair starts from the numerically feasible candidate
-        closest to the exact quality constraints; repaired structures are
-        accepted only through the unchanged exact quality gate.
+        closest to the exact quality constraints. Warn mode defers returning
+        a quality reject until the full search is exhausted; off mode does
+        not run quality repairs. Both require hard-feasible candidates.
         """
 
         # [step 1] Initialize run-level counters and best-result state.
@@ -1750,8 +1759,9 @@ class JointLagrangeOptimizer:
             attempt and solver diagnostics. A candidate with ``raw_ok=False``
             is rejected immediately. Otherwise, it is converted into a full
             molecule, evaluated by the exact structural quality metrics, and
-            rejected when quality-gated early stop is enabled but the gate is
-            not passed. Every accepted candidate increments the acceptance
+            rejected in strict/warn mode when the gate is not passed. Warn
+            retains hard-feasible rejects for final fallback. Every accepted
+            candidate increments the acceptance
             counters and replaces the current best result when its objective
             value is lower.
 
@@ -1765,7 +1775,8 @@ class JointLagrangeOptimizer:
             track_quality_rejection:
                 Whether a numerically valid quality reject should be retained
                 as a possible quality-repair starting point. Repair results set
-                this to ``False`` so failed repairs are not queued recursively.
+                this to ``False``; warn mode still retains them for final export.
+                Each sampling level performs at most one repair.
 
             Returns
             -------
@@ -1786,11 +1797,29 @@ class JointLagrangeOptimizer:
             if not solution.raw_ok:
                 return False
             successful += 1
+            if not (
+                np.isfinite(solution.x).all()
+                and np.isfinite(solution.objective)
+            ):
+                return False
+            if self.config.quality_mode != "strict" and not (
+                np.isfinite(solution.equality_error)
+                and np.isfinite(solution.inequality_slack)
+                and solution.equality_error <= self.config.equality_tolerance
+                and solution.inequality_slack
+                >= -self.config.inequality_tolerance
+            ):
+                return False
             molecule, ranges = self._make_result_molecule(solution.x)
+            if not np.isfinite(molecule.positions).all():
+                return False
             metrics = self._quality_metrics(molecule, ranges)
             quality_ok = self._passes_quality(metrics)
-            if self.config.use_quality_early_stop and not quality_ok:
-                if track_quality_rejection:
+            if self.config.quality_mode != "off" and not quality_ok:
+                if (
+                    track_quality_rejection
+                    or self.config.quality_mode == "warn"
+                ):
                     quality_rejected.append(solution)
                 return False
             accepted += 1
@@ -1837,9 +1866,10 @@ class JointLagrangeOptimizer:
                         self._solve_one(record, use_detection),
                         message_prefix,
                     )
-                    should_stop = (
-                        self.config.use_early_stop
-                        or self.config.use_quality_early_stop
+                    should_stop = self.config.use_early_stop or (
+                        self.config.use_quality_early_stop
+                        and best_quality_ok
+                        and self.config.quality_mode != "off"
                     )
                     if should_stop and accepted_now:
                         stopped_early = True
@@ -1972,6 +2002,28 @@ class JointLagrangeOptimizer:
             if best_solution is not None:
                 break
 
+        # Warn fallback must not suppress adaptive expansion or repair.
+        used_quality_fallback = False
+        if (
+            best_solution is None
+            and self.config.quality_mode == "warn"
+            and quality_rejected
+        ):
+            best_solution = min(
+                quality_rejected,
+                key=lambda candidate: (
+                    self._quality_violation(candidate),
+                    candidate.objective,
+                ),
+            )
+            best_molecule, best_ranges = self._make_result_molecule(
+                best_solution.x
+            )
+            best_metrics = self._quality_metrics(best_molecule, best_ranges)
+            best_quality_ok = self._passes_quality(best_metrics)
+            accepted += 1
+            used_quality_fallback = True
+
         # [step 9] Aggregate start-generation, solve, repair, and fallback stats.
         build_stats.seed_time_s = build_time
         build_stats.adaptive_levels = used_levels
@@ -2033,7 +2085,12 @@ class JointLagrangeOptimizer:
             quality_ok=best_quality_ok,
             quality_metrics=best_metrics,
             stats=stats,
-            message=f"success: {accepted}/{attempted}",
+            message=(
+                f"quality warning: exported hard-feasible candidate; "
+                f"{accepted}/{attempted}"
+                if used_quality_fallback
+                else f"success: {accepted}/{attempted}"
+            ),
         )
 
 
@@ -2090,6 +2147,7 @@ class IterateJointLagrangeAnalyzer:
     #: Lagrange options mapped onto ``JointLagrangeConfig`` fields. Every other
     #: config field keeps its Version 2 (Test7.2/Test8) default.
     _CONFIG_OPTION_KEYS = (
+        "quality_mode",
         "use_adaptive_sampling",
         "n_link_sphere",
         "n_orientation_sphere",
@@ -2118,9 +2176,9 @@ class IterateJointLagrangeAnalyzer:
             :class:`Molecule` and both link indices are 1-based. A single
             attachment is simply a list holding one tuple; the whole list is
             optimized jointly.
-        options : dict of str to bool or int, optional
+        options : dict of str to bool, int or str, optional
             Resolved Lagrange options (see the ``lagrange_multipliers`` entry
-            in the algorithm registry). Only the nine keys in
+            in the algorithm registry). Only the keys in
             :attr:`_CONFIG_OPTION_KEYS` are consumed; anything absent keeps the
             Version 2 default.
         """
@@ -2130,6 +2188,7 @@ class IterateJointLagrangeAnalyzer:
         # happens exactly once inside run().
         self.substituents = list(substituents)
         self.options = dict(options or {})
+        self.quality_details: dict[str, object] = {}
 
     def _build_config(self) -> JointLagrangeConfig:
         """Map the exposed Lagrange options onto a ``JointLagrangeConfig``.
@@ -2207,6 +2266,7 @@ class IterateJointLagrangeAnalyzer:
             skeleton_link_indices.append(skeleton_link_index - 1)
             substituent_link_indices.append(substituent_link_index - 1)
 
+        self.quality_details = {}
         result = optimize_joint_lagrange(
             skeleton=skeleton_mol,
             substituents=substituent_mols,
@@ -2227,6 +2287,24 @@ class IterateJointLagrangeAnalyzer:
 
         if not result.success or result.final is None:
             return None
+
+        self.quality_details = {
+            "quality_mode": self.options.get("quality_mode", "strict"),
+            "quality_ok": result.quality_ok,
+            "quality_metrics": dict(result.quality_metrics),
+        }
+        if (
+            self.quality_details["quality_mode"] == "warn"
+            and not result.quality_ok
+        ):
+            logger.warning(
+                "JLGO exported a hard-feasible candidate that failed quality "
+                "checks: min_nonbond=%.6f A, n_close_20=%d, "
+                "vdw075_overlap_sum=%.6f A",
+                result.quality_metrics["min_nonbond"],
+                result.quality_metrics["n_close_20"],
+                result.quality_metrics["vdw075_overlap_sum"],
+            )
 
         # result.final already orders atoms as skeleton + each substituent in
         # input order; merge frozen flags in the same order.

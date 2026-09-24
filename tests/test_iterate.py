@@ -784,6 +784,18 @@ def test_iterate_direct_multiple_options_preserve_order(monkeypatch):
             {"max_starts": 3, "slsqp_maxiter": 4},
             id="explicit-jlgo",
         ),
+        pytest.param(
+            ["jlgo", "--quality-mode", "warn"],
+            "jlgo",
+            {"quality_mode": "warn"},
+            id="jlgo-warn",
+        ),
+        pytest.param(
+            ["jlgo", "--quality-mode", "off"],
+            "jlgo",
+            {"quality_mode": "off"},
+            id="jlgo-off",
+        ),
     ],
 )
 def test_iterate_direct_algorithm_selection_and_options(
@@ -3035,3 +3047,90 @@ def test_iterate_cleanup_uses_bonded_start(monkeypatch, protect_core):
         skeleton_indices=[3, 4, 7] if protect_core else None,
     ).run()
     assert mapping == {1: 1, 3: 2, 4: 3, 5: 4, 7: 5}
+
+
+@pytest.mark.parametrize("mode", ["strict", "warn", "off"])
+def test_iterate_quality_mode_cli_overrides_yaml(mode, tmp_path, monkeypatch):
+    """CLI selection reaches the analyzer; omitted options preserve YAML."""
+    captured = _capture_iterate_jobs(monkeypatch)
+    config = yaml.safe_load((CONFIG_DIR / "jlgo_generation.yaml").read_text())
+    config["algorithm"]["options"] = {"quality_mode": "warn"}
+    path = tmp_path / "quality.yaml"
+    path.write_text(yaml.safe_dump(config))
+    for extra, expected in [([], "warn"), (["--quality-mode", mode], mode)]:
+        result = CliRunner().invoke(
+            run, ["iterate", "yaml", "-f", str(path), "jlgo", *extra], obj={}
+        )
+        assert result.exit_code == 0, result.output
+        resolved = captured[-1].settings.algorithm_config
+        assert resolved.options["quality_mode"] == expected
+        from chemsmart.jobs.iterate.jlgo import IterateJointLagrangeAnalyzer
+
+        analyzer = IterateJointLagrangeAnalyzer(None, [], resolved.options)
+        assert analyzer._build_config().quality_mode == expected
+
+
+@pytest.mark.parametrize("value", ["invalid", False, 1, None])
+def test_iterate_quality_mode_rejects_bad_yaml(value):
+    with pytest.raises((ValueError, click.BadParameter), match="quality_mode"):
+        resolve_algorithm_config(
+            yaml_algorithm={"name": "jlgo", "options": {"quality_mode": value}}
+        )
+
+
+def test_iterate_quality_default_and_quoted_off():
+    assert (
+        resolve_algorithm_config(cli_algorithm_name="jlgo").options[
+            "quality_mode"
+        ]
+        == "strict"
+    )
+    config = yaml.safe_load('name: jlgo\noptions:\n  quality_mode: "off"\n')
+    assert (
+        resolve_algorithm_config(yaml_algorithm=config).options["quality_mode"]
+        == "off"
+    )
+
+
+def test_iterate_quality_warning_survives_worker_report(
+    iterate_jobrunner,
+    tmp_path,
+    monkeypatch,
+):
+    """Worker diagnostics retain their combination label in the .out report."""
+    from types import SimpleNamespace
+
+    runner_module = importlib.import_module("chemsmart.jobs.iterate.runner")
+    job = _build_job_from_config_path(
+        CONFIG_DIR / "jlgo_generation.yaml", iterate_jobrunner, tmp_path
+    )
+    pool, combinations, errors, _ = iterate_jobrunner._generate_combinations(
+        job
+    )
+    assert not errors
+    details = {
+        "quality_mode": "warn",
+        "quality_ok": False,
+        "quality_metrics": {
+            "min_nonbond": 1.8,
+            "n_close_20": 2,
+            "vdw075_overlap_sum": 0.9,
+        },
+    }
+    monkeypatch.setattr(
+        runner_module,
+        "build_analyzer",
+        lambda config, skeleton, subs: SimpleNamespace(
+            run=lambda: skeleton, quality_details=details
+        ),
+    )
+    with runner_module._silence_iterate_worker_logging():
+        result = runner_module._run_combination_task(combinations[0], pool, 1)
+    assert result.execution_status == "SUCCESS"
+    assert result.quality_ok is False
+    report = _minimal_iterate_report(None)
+    report.results = [result]
+    rendered = report.render()
+    assert combinations[0].label in rendered
+    assert "WARNING: quality checks failed" in rendered
+    assert "min_nonbond: 1.8" in rendered

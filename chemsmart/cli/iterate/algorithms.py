@@ -55,6 +55,15 @@ def register_iterate_algorithm_commands(parent, build_job):
 
     @parent.command(name="jlgo", cls=MyCommand, help=JLGO_HELP)
     @click.option(
+        "--quality-mode",
+        type=click.Choice(["strict", "warn", "off"]),
+        default=None,
+        help="Structural quality policy (default: strict). strict rejects "
+        "quality failures; warn finishes the search and exports the best "
+        "hard-feasible candidate if none passes; off disables quality "
+        "rejection and repair. Metrics are retained in the run report.",
+    )
+    @click.option(
         "--adaptive-sampling/--no-adaptive-sampling",
         default=None,
         help="Run a fixed coarse sampling stage first; the six full-stage "
@@ -123,6 +132,7 @@ def register_iterate_algorithm_commands(parent, build_job):
     @click.pass_context
     def jlgo(
         ctx,
+        quality_mode,
         adaptive_sampling,
         link_sphere_samples,
         orientation_sphere_samples,
@@ -136,6 +146,7 @@ def register_iterate_algorithm_commands(parent, build_job):
         """Run Joint Lagrange Geometry Optimization (JLGO)."""
         cli_options = _collect_cli_options(
             {
+                "quality_mode": quality_mode,
                 "use_adaptive_sampling": adaptive_sampling,
                 "n_link_sphere": link_sphere_samples,
                 "n_orientation_sphere": orientation_sphere_samples,
